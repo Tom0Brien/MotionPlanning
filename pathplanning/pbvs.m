@@ -33,7 +33,7 @@ function example_3D_planning_with_pointcloud_PBVS()
     Delta_max = 0.05;
 
     %% --------------------- PLANNER Hyperparameters --------------------------
-    dt        = 0.5;            
+    dt        = 0.25;            
     N         = 5;              
     I         = 10;           
     lambda    = 0.5;            
@@ -57,8 +57,7 @@ function example_3D_planning_with_pointcloud_PBVS()
                 n_states, n_actions, @(x,u)0, @(x,u)0 );
 
     %% --------------------- Initial State and Path ------------------------
-    x0 = [0.0; 0.5; 0.6];  % start (for planning)
-    path = x0;             % record trajectory
+    x = [0.0; 0.5; 0.6];  % start (for planning)
 
     %% --------------------- Figure / Axis Initialization ------------------
     fig_bg_color = hex2rgb(colors_struct.White);
@@ -87,7 +86,7 @@ function example_3D_planning_with_pointcloud_PBVS()
 
     %% --------------------- Main Loop: Visit Goals in Sequence ------------
     % (This planning loop is the same as before.)
-    camera_poses = [0,0,0,0,0,0];  % Initialize array to store camera poses
+    camera_poses = [];  % Initialize array to store camera poses
     
     for goal_idx = 1:size(goals,2)
         current_goal = goals(:,goal_idx);
@@ -95,23 +94,22 @@ function example_3D_planning_with_pointcloud_PBVS()
               num2str(current_goal(1)), ', ', num2str(current_goal(2)), ...
               ', ', num2str(current_goal(3)), ')']);
     
-        while norm(x0 - current_goal) > 0.01
+        while norm(x - current_goal) > 0.01
             planner.stage_cost    = @(x,u) stage_cost(x,u,current_goal);
             planner.terminal_cost = @(x,u) terminal_cost(x,u,current_goal);
     
             % PLANNER get new control
-            U = planner.get_action_fmincon(x0);
+            U = planner.get_action_fmincon(x);
             u_exec = U(:,1);
     
             % Step the model
-            x0 = model.step(u_exec, dt, x0);
-            path = [path, x0];  %#ok<AGROW>
+            x = model.step(u_exec, dt, x);
     
             % Sample camera orientations and select the best one
-            best_orientation = sampleCameraOrientations(x0, ptCloud, ax);
+            best_orientation = sampleCameraOrientations(x, ptCloud, ax);
     
             % Store the current camera pose (position and orientation)
-            camera_poses = [camera_poses; x0', best_orientation]; %#ok<AGROW>
+            camera_poses = [camera_poses; x', best_orientation]; %#ok<AGROW>
     
             % -------------- Visualization of Iteration Rollouts -----------
             cla(ax);
@@ -136,7 +134,7 @@ function example_3D_planning_with_pointcloud_PBVS()
     
             % Plot path so far
             path_color = hex2rgb(colors_struct.Black);
-            plot3(ax, path(1,:), path(2,:), path(3,:), '.-', ...
+            plot3(ax, camera_poses(:,1), camera_poses(:,2), camera_poses(:,3), '.-', ...
                   'LineWidth',1.5, 'Color', path_color);
     
             % Current target
@@ -144,7 +142,7 @@ function example_3D_planning_with_pointcloud_PBVS()
                   'o','MarkerSize',8, 'MarkerFaceColor', goals_color, 'MarkerEdgeColor','k');
     
             % Visualize camera frustum and visible points
-            visualizeCameraFrustum(x0, best_orientation, ptCloud, ax);
+            visualizeCameraFrustum(x, best_orientation, ptCloud, ax);
     
             drawnow;
         end
@@ -163,11 +161,11 @@ function example_3D_planning_with_pointcloud_PBVS()
     endEffectorName = 'panda_hand';
     
     % --- Use IK to initialize the robot near the first waypoint ---
-    p_start = path(:,1);                  % First planned waypoint (3x1 position)
+    p_start = camera_poses(1,1:3);                  % First planned waypoint (3x1 position)
     orientation_start = camera_poses(1,4:6); % Corresponding Euler angles (XYZ)
     % Combine the orientation with an additional rotation if desired:
     desiredOrientationStart = eul2tform(orientation_start, "XYZ") * eul2tform([0, pi/2, 0], "XYZ");
-    T_start = trvec2tform(p_start') * desiredOrientationStart;
+    T_start = trvec2tform(p_start) * desiredOrientationStart;
     
     % Set up the IK solver and solve for a configuration near T_start:
     ik = inverseKinematics('RigidBodyTree', robot);
@@ -190,12 +188,12 @@ function example_3D_planning_with_pointcloud_PBVS()
     
     %% --------------------- Visual Servoing Loop for Each Waypoint ----------------------
     % (We use the position from "path" and desired orientation from "camera_poses".)
-    for i = 1:size(path,2)
+    for i = 1:size(camera_poses,1)
         % --- Compute the desired end-effector transformation ---
-        p_desired = path(:,i);
+        p_desired = camera_poses(i,1:3);
         orientation_desired = camera_poses(i,4:6);  % Euler angles in XYZ (in radians)
         desiredOrientation = eul2tform(orientation_desired, "XYZ") * eul2tform([0,pi/2,0], "XYZ");
-        T_desired = trvec2tform(p_desired') * desiredOrientation;
+        T_desired = trvec2tform(p_desired) * desiredOrientation;
         
         % --- Visual Servoing Loop for the Current Waypoint ---
         iter = 0;
@@ -262,7 +260,7 @@ function example_3D_planning_with_pointcloud_PBVS()
     for i = 1:size(servoTrajectory,1)
         cla(axVideo);
         % Plot the planned path and goals
-        plot3(axVideo, path(1,:), path(2,:), path(3,:), '--','Color','red','LineWidth',1.5);
+        plot3(axVideo, camera_poses(:,1), camera_poses(:,2), camera_poses(:,3), '--','Color','red','LineWidth',1.5);
         plot3(axVideo, goals(1,:), goals(2,:), goals(3,:), 'o--',...
               'LineWidth',2, 'MarkerSize',8, 'Color','Red','MarkerFaceColor','black');
         for iGoal = 1:size(goals,2)
@@ -307,7 +305,7 @@ function example_3D_planning_with_pointcloud_PBVS()
     figure;
     plot3(ee_positions(:,1), ee_positions(:,2), ee_positions(:,3), 'b.-', 'LineWidth', 1.5);
     hold on;
-    plot3(path(1,:), path(2,:), path(3,:), 'r.--', 'LineWidth', 2);
+    plot3(camera_poses(:,1), camera_poses(:,2), camera_poses(:,3), 'r.--', 'LineWidth', 2);
     xlabel('X'); ylabel('Y'); zlabel('Z');
     legend('Servo Trajectory', 'Planned Path', 'Location', 'Best');
     title('End-Effector Servo Trajectory vs. Planned Path');

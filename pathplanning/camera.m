@@ -318,8 +318,8 @@ end
 function best_orientation = sampleCameraOrientations(position, ptCloud, ax)
     % Define angle increments (45 degrees in radians)
     angle_increment = deg2rad(45);
-    roll_angles = [0]; %0:angle_increment:(2*pi - angle_increment);  % Roll angles
-    pitch_angles = [0]; %0:angle_increment:(2*pi - angle_increment); % Pitch angles
+    roll_angles = 0:angle_increment:(2*pi - angle_increment);  % Roll angles
+    pitch_angles = 0:angle_increment:(2*pi - angle_increment); % Pitch angles
     yaw_angles = 0:angle_increment:(2*pi - angle_increment);   % Yaw angles
 
     % Initialize variables
