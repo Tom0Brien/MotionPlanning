@@ -43,7 +43,7 @@ function example_3D_planning_with_pointcloud_PBVS()
 
     %% --------------------- Model Definition ------------------------------
     model = struct();
-    model.step = @(u, dt, x) x + dt*u;
+    model.step = @(u, dt, x) x + u;
 
     n_states  = 3; 
     n_actions = 3; 
@@ -335,9 +335,6 @@ function c = stageCostPointCloud(x, u, current_goal, ptCloud, collisionRadius, D
     else
         penalty_step = 0;
     end
-
-    % Control usage penalty
-    penalty_control = 0.1 * (u.' * u);
 
     % Combine stage cost
     c = 100*dist_goal^2 + penalty_obstacle + penalty_step + penalty_control;

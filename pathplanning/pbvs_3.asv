@@ -22,44 +22,60 @@ function example_3D_planning_with_pointcloud_PBVS()
 
     %% --------------------- 1) Load and Downsample the Point Cloud -------
     ptCloud = pcread('vine_simple.pcd');
+    voxelSize = 0.02;  % Define the size of each voxel
+    ptCloud = pcdownsample(ptCloud, 'gridAverage', voxelSize);
+    
     collisionRadius = 0.01;  
 
     %% --------------------- 2) 3D Environment & Problem Setup ------------
-    goals = [
-        0.23958  0.27   0.38      0.43975;   % x-coords
-        0.6      0.6    0.6       0.6;       % y-coords
-        0.6098   0.6386 0.66107   0.65       % z-coords
+    % Define position and orientation goals.
+    % Each column is a goal pose [x; y; z; roll; pitch; yaw]
+    goals_poses = [
+        0.23958,       0.43975;   % x-coords
+        0.6,           0.6;       % y-coords
+        0.6098,      0.65;      % z-coords
+        0,                 0;         % roll
+        0,                0;         % pitch
+        pi/2,           0       % yaw
     ];
-    Delta_max = 0.1;
+    num_goals = size(goals_poses,2);
+    goals = goals_poses;
+
+    % (The following Delta_max was previously used as a single bound.)
+    % Now we define separate bounds for position and orientation:
+    Delta_max_pos = 0.05;     % Maximum allowed position change per step
+    Delta_max_orient = 0.5; % Maximum allowed orientation change (in radians) per step
 
     %% --------------------- PLANNER Hyperparameters -----------------------
     dt        = 0.05;            
     N         = 5;              
     I         = 10;           
     lambda    = 0.5;            
-    sigma_eps = (1e-2^2)*eye(3);
+    sigma_eps = (1e-2^2)*eye(6);  % Updated for 6D state
     nu        = 1.0;            
-    R         = 0.1*eye(3);     
-    Delta_max_pos = 0.05;     % Maximum allowed position change per step
-    Delta_max_orient = 1; % Maximum allowed orientation change (in radians) per step
+    R         = 0.1*eye(6);     % Updated for 6D
 
     %% --------------------- Model Definition ------------------------------
+    % State: [x; y; z; roll; pitch; yaw]
     model = struct();
-    model.step = @(u, dt, x) x + u;   % Simple double-integrator style
+    model.step = @(u, dt, x) x + u;   % Simple additive (Euler) integration
 
-    n_states  = 3; 
-    n_actions = 3; 
+    n_states  = 6; 
+    n_actions = 6; 
 
     %% --------------------- Cost Functions --------------------------------
-    stage_cost    = @(x,u,g) stageCostPointCloud(x, u, g, ptCloud, collisionRadius, Delta_max);
-    terminal_cost = @(x,u,g) norm(x - g, 2)^2;
-
+    % Use homogeneous error for pose error plus a visibility reward.
+    stage_cost = @(x,u,g) stageCostPose(x, u, g, ptCloud, collisionRadius);
+    terminal_cost = @(x,u,g) terminalCostPose(x, g);
+    
     %% --------------------- Create PLANNER Object -------------------------
+    % Pass the new bounds to the planner.
     planner = PLANNER(model, N, I, dt, lambda, sigma_eps, nu, R, ...
-                n_states, n_actions, @(x,u)0, @(x,u)0, Delta_max_pos, Delta_max_pos);
+                n_states, n_actions, @(x,u)0, @(x,u)0, Delta_max_pos, Delta_max_orient );
 
     %% --------------------- Initial State and Path ------------------------
-    x = [0.0; 0.5; 0.6];  % start (for planning)
+    % Start at a given position with zero orientation.
+    x = [0.0; 0.5; 0.6; 0; 0; 0];  
 
     %% --------------------- Figure / Axis Initialization ------------------
     fig_bg_color = hex2rgb(colors_struct.White);
@@ -76,10 +92,10 @@ function example_3D_planning_with_pointcloud_PBVS()
     title(ax, 'Obstacle Point Cloud (Downsampled)', 'Color','k');
 
     goals_color = hex2rgb(colors_struct.RobinsEggBlue);
+    % Plot only the positions of the goals.
     plot3(ax, goals(1,:), goals(2,:), goals(3,:), 'o--',...
           'LineWidth', 2,'MarkerSize',8, 'Color', goals_color, ...
           'MarkerFaceColor', goals_color);
-
     for iGoal = 1:size(goals,2)
         text(goals(1,iGoal), goals(2,iGoal), goals(3,iGoal), ...
             sprintf('G%d', iGoal), 'Color','k',...
@@ -87,30 +103,36 @@ function example_3D_planning_with_pointcloud_PBVS()
     end
 
     %% --------------------- Main Loop: Visit Goals in Sequence ------------
-    camera_poses = [];  % Will store final path as [x, y, z, r, p, y]
+    camera_poses = [];  % Will store poses as [x y z roll pitch yaw]
     
     for goal_idx = 1:size(goals,2)
         current_goal = goals(:,goal_idx);
         disp(['Moving towards Goal ', num2str(goal_idx), ': (', ...
               num2str(current_goal(1)), ', ', num2str(current_goal(2)), ...
-              ', ', num2str(current_goal(3)), ')']);
+              ', ', num2str(current_goal(3)), ') with orientation (', ...
+              num2str(current_goal(4)), ', ', num2str(current_goal(5)), ', ', num2str(current_goal(6)), ')']);
     
-        while norm(x - current_goal) > 0.01
-            planner.stage_cost    = @(x,u) stage_cost(x,u,current_goal);
-            planner.terminal_cost = @(x,u) terminal_cost(x,u,current_goal);
+        % Compute the current and goal transforms.
+        H_x = trvec2tform(x(1:3)') * eul2tform(x(4:6)', 'XYZ');
+        H_goal = trvec2tform(current_goal(1:3)') * eul2tform(current_goal(4:6)', 'XYZ');
     
-            % Get new control from the planner
+        while norm(homogeneous_error(H_goal, H_x)) > 0.01
+            % Update cost functions with the current goal.
+            planner.stage_cost    = @(x,u) stage_cost(x, u, current_goal);
+            planner.terminal_cost = @(x,u) terminal_cost(x, u, current_goal);
+    
+            % Get new control from the planner.
             U = planner.get_action(x);
             u_exec = U(:,1);
     
-            % Step the "robot" in 3D position space
+            % Step the “robot” in 6D (position and orientation)
             x = model.step(u_exec, dt, x);
     
-            % Sample camera orientations and select the best one
-            best_orientation = sampleCameraOrientations(x, ptCloud, ax);
+            % Update the current transform.
+            H_x = trvec2tform(x(1:3)') * eul2tform(x(4:6)', 'XYZ');
     
-            % Store the current camera pose (position and orientation)
-            camera_poses = [camera_poses; x', best_orientation]; %#ok<AGROW>
+            % Save the current pose.
+            camera_poses = [camera_poses; x'];
     
             % -------------- Visualization of Iteration Rollouts -----------
             cla(ax);
@@ -120,10 +142,10 @@ function example_3D_planning_with_pointcloud_PBVS()
             xlabel(ax, 'X'); ylabel(ax, 'Y'); zlabel(ax, 'Z');
             view(ax, 3);
     
-            % Redraw point cloud
+            % Redraw the point cloud.
             pcshow(ptCloud, 'Parent', ax, 'BackgroundColor','white');
     
-            % Redraw goals
+            % Redraw the goals.
             plot3(ax, goals(1,:), goals(2,:), goals(3,:), 'o--',...
                   'LineWidth',2,'MarkerSize',8, 'Color', goals_color, ...
                   'MarkerFaceColor', goals_color);
@@ -133,44 +155,59 @@ function example_3D_planning_with_pointcloud_PBVS()
                     'VerticalAlignment','bottom','HorizontalAlignment','left');
             end
     
-            % Plot path so far
+            % Plot the path so far (using positions only).
             path_color = hex2rgb(colors_struct.Black);
             plot3(ax, camera_poses(:,1), camera_poses(:,2), camera_poses(:,3), '.-', ...
                   'LineWidth',1.5, 'Color', path_color);
     
-            % Current target
+            % Mark the current target.
             plot3(ax, current_goal(1), current_goal(2), current_goal(3), ...
                   'o','MarkerSize',8, 'MarkerFaceColor', goals_color, 'MarkerEdgeColor','k');
     
-            % Visualize camera frustum and visible points
-            visualizeCameraFrustum(x, best_orientation, ptCloud, ax);
+            % Visualize the camera frustum using the current pose.
+            visualizeCameraFrustum(x(1:3), x(4:6), ptCloud, ax);
     
             drawnow;
         end
     end
     disp('Reached all goals!');
 
-    %% ======================= POSITION-BASED VISUAL SERVOING =======================
-    % We have 'camera_poses' as a sequence of [x, y, z, roll, pitch, yaw].
-    % Instead of stopping at each waypoint, we'll define a "lookahead" approach.
+     %% -------------- NEW: Assess Visibility Performance --------------
+    % Loop through each planned camera pose, count how many points were seen 
+    % (using the same FOV, range, and transformation as in the cost term),
+    % and sum these counts to assess the overall visibility performance.
+    totalVisiblePoints = 0;
+    fov = 60; 
+    max_range = 0.5; 
+    min_range = 0.0;
+    for i = 1:size(camera_poses,1)
+        x_pose = camera_poses(i,:)';
+        Rwc = eul2rotm(x_pose(4:6)', 'XYZ');
+        ptCloud_camera = transformPointCloud(ptCloud, x_pose(1:3), Rwc);
+        visible_bool = isPointInFOV(ptCloud_camera, fov, max_range, min_range);
+        count_visible = sum(visible_bool);
+        totalVisiblePoints = totalVisiblePoints + count_visible;
+    end
+    disp(['Total number of points seen along the planned path: ', num2str(totalVisiblePoints)]);
 
-    % 1) Convert 'camera_poses' to homogeneous transforms for easy manipulation.
+    %% ======================= POSITION-BASED VISUAL SERVOING =======================
+    % The planned poses are stored in 'camera_poses' as [x y z roll pitch yaw].
+    % Convert these poses into homogeneous transforms.
     pathTransforms = cell(size(camera_poses,1), 1);
     for i = 1:size(camera_poses,1)
         p = camera_poses(i,1:3);
         eulAngles = camera_poses(i,4:6); % [roll, pitch, yaw]
-        R = eul2rotm(eulAngles, 'XYZ');
-        pathTransforms{i} = trvec2tform(p) * rotm2tform(R);
+        R_mat = eul2rotm(eulAngles, 'XYZ');
+        pathTransforms{i} = trvec2tform(p) * rotm2tform(R_mat);
     end
 
-    % 2) Load the Panda robot model
+    % 2) Load the Panda robot model.
     robot = loadrobot("frankaEmikaPanda","DataFormat","row");
     endEffectorName = 'panda_hand';
 
-    % --- Use IK to initialize the robot near the first transform in pathTransforms
+    % --- Initialize the robot near the first transform in pathTransforms.
     T_first = pathTransforms{1};
-    % Optionally combine with an extra rotation about Y if you want the camera to point forward, etc.
-    T_extraRot = eul2tform([0, pi/2, 0], "XYZ");
+    T_extraRot = eul2tform([0, pi/2, 0], "XYZ"); % extra rotation if desired
     T_start = T_first * T_extraRot;
 
     ik = inverseKinematics('RigidBodyTree', robot);
@@ -180,72 +217,55 @@ function example_3D_planning_with_pointcloud_PBVS()
     q = configSol;  
 
     %% --------------------- PBVS Controller Parameters ----------------------
-    % Gains for rotation and translation
-    Kp_r = 5.0;   % rotational gain
+    Kp_r = 5.0;    % rotational gain
     Kp_t = 40.0;   % translational gain
-    % 'homogeneous_error' returns orientation in e(1:3), translation in e(4:6),
-    % so we place rotation gains in the top-left corner:
+    % The homogeneous_error returns a 6-vector where the first 3 elements are the orientation error.
     K = diag([Kp_r, Kp_r, Kp_r, Kp_t, Kp_t, Kp_t]);
 
     dt_servo  = 0.01;   % servo time step
-    maxIter   = 50;     % maximum servo iterations
+    maxIter   = 50;     % maximum iterations
     threshold = 1e-2;   % final goal threshold
 
-    % "Lookahead" offset in terms of path index.
-    L = 1;  
+    L = 1;  % Lookahead offset (path index)
     servoTrajectory = q;
-
-    %% --------------------- Lookahead PBVS Loop ---------------------------
     velocityHistory = [];  
-    refPositions = zeros(maxIter, 3);  % Store the position of the "lookahead" reference
+    refPositions = zeros(maxIter, 3);  % To store the lookahead reference positions
     
+    %% --------------------- Lookahead PBVS Loop ---------------------------
     for iter = 1:maxIter
-        
-        % Current end-effector transform
         T_current = getTransform(robot, q, endEffectorName);
     
-        % Check final pose threshold
         T_final = pathTransforms{end} * T_extraRot;
         err_final = homogeneous_error(T_final, T_current);
         if norm(err_final) < threshold
             disp('Lookahead PBVS: Reached final pose (within threshold).');
-            % Trim refPositions if we exit early
             refPositions = refPositions(1:iter,:);
             break;
         end
     
-        % Find the closest path index
         kClosest = findClosestPoseOnPath(T_current, pathTransforms);
         kLA = min(kClosest + L, length(pathTransforms));
         T_ref = pathTransforms{kLA} * T_extraRot;
     
-        % Record the current reference position for plotting
         refPositions(iter,:) = T_ref(1:3,4)';
     
-        % PBVS error & twist
         err_vec = homogeneous_error(T_ref, T_current);
         v = K * err_vec;   % 6x1 twist: [omega_x; omega_y; omega_z; v_x; v_y; v_z]
-        velocityHistory = [velocityHistory, v];  %#ok<AGROW>
+        velocityHistory = [velocityHistory, v];
     
-        % Jacobian-based IK step
         J = geometricJacobian(robot, q, endEffectorName);
         q_dot = pinv(J) * v;
         q = q + (q_dot' * dt_servo);
     
-        % -------------- Add a disturbance at iteration = 30 (example) -----------
         if iter == 200
             disp('>>> Applying external disturbance to the robot joints! <<<');
-            A small offset to all joints. Adjust magnitude or which joints to perturb as needed.
             q = q + 0.05*randn(size(q));  
-            % or simply offset one joint, e.g. q(2) = q(2) + 0.1, etc.
         end
     
-        servoTrajectory = [servoTrajectory; q]; %#ok<AGROW>
+        servoTrajectory = [servoTrajectory; q];
     end
 
-
-    %% If the loop didn't break early, trim refPositions properly
-    finalIter = size(servoTrajectory,1);  % actual number of servo steps
+    finalIter = size(servoTrajectory,1);
     if finalIter < size(refPositions,1)
         refPositions = refPositions(1:finalIter,:);
     end
@@ -255,7 +275,6 @@ function example_3D_planning_with_pointcloud_PBVS()
     timeVec = (0:(nSamples-1)) * dt_servo;
     
     figure('Name','End-Effector Twist vs. Time');
-    % Angular velocities in top subplot
     subplot(2,1,1);
     plot(timeVec, velocityHistory(1,:), 'LineWidth',1.5); hold on;
     plot(timeVec, velocityHistory(2,:), 'LineWidth',1.5);
@@ -265,7 +284,6 @@ function example_3D_planning_with_pointcloud_PBVS()
     title('End-Effector Angular Velocity (PBVS)');
     grid on;
     
-    % Linear velocities in bottom subplot
     subplot(2,1,2);
     plot(timeVec, velocityHistory(4,:), 'LineWidth',1.5); hold on;
     plot(timeVec, velocityHistory(5,:), 'LineWidth',1.5);
@@ -290,7 +308,7 @@ function example_3D_planning_with_pointcloud_PBVS()
         'ToolBar','none',...
         'Resize','off',...
         'WindowStyle','normal');
-    drawnow;  % force figure update
+    drawnow;
 
     axVideo = axes('Parent', figVideo, 'Units','pixels',...
                    'Position',[0 0 vidWidth vidHeight], 'Color','white');
@@ -306,18 +324,14 @@ function example_3D_planning_with_pointcloud_PBVS()
     view(axVideo, [20 45]);
     title(axVideo, 'Recording: Robot + Point Cloud + Path (Lookahead PBVS)','Color','k');
 
-    % We'll also create an array of "pure" positions from pathTransforms for easy plotting
     pathPositions = zeros(length(pathTransforms),3);
     for iP = 1:length(pathTransforms)
         pathPositions(iP,:) = pathTransforms{iP}(1:3,4)';
     end
 
-    % Animate
-    numFrames = size(servoTrajectory,1);  % how many frames to animate
+    numFrames = size(servoTrajectory,1);
     for i = 1:numFrames
         cla(axVideo);
-
-        % Plot the planned path (positions) and goals
         plot3(axVideo, pathPositions(:,1), pathPositions(:,2), pathPositions(:,3), ...
               '--','Color','red','LineWidth',1.5);
         plot3(axVideo, goals(1,:), goals(2,:), goals(3,:), 'o--',...
@@ -334,17 +348,14 @@ function example_3D_planning_with_pointcloud_PBVS()
         lighting gouraud;  
         material dull;
 
-        % Show robot in its current configuration
         show(robot, servoTrajectory(i,:), 'Parent', axVideo, ...
-             'PreservePlot', false, 'FastUpdate', true,Visuals="off");
+             'PreservePlot', false, 'FastUpdate', true, Visuals="off");
     
-        % End-effector transform for camera frustum visualization
         tform_ee = getTransform(robot, servoTrajectory(i,:), endEffectorName);
         pos = tform_ee(1:3,4);
         eul_angles = rotm2eul(tform_ee(1:3,1:3)*eul2rotm([0,-pi/2,0], "XYZ"), 'XYZ');
         visualizeCameraFrustum(pos, eul_angles, ptCloud, axVideo);
 
-        % Plot the *current lookahead reference* as a magenta point
         if i <= size(refPositions,1)
             refPos = refPositions(i,:);
             plot3(axVideo, refPos(1), refPos(2), refPos(3), 'mo', ...
@@ -352,8 +363,6 @@ function example_3D_planning_with_pointcloud_PBVS()
         end
     
         drawnow;
-       
-        % Capture the video frame
         frame = getframe(figVideo, [0 0 vidWidth vidHeight]);
         writeVideo(writerObj, frame);
     end
@@ -362,7 +371,6 @@ function example_3D_planning_with_pointcloud_PBVS()
     disp('Video recording complete.');
     
     %% =================== PLOT SERVO TRAJECTORY ===================
-    % Extract end-effector positions from the stored servo joint configurations.
     numPoints = size(servoTrajectory, 1);
     ee_positions = zeros(numPoints, 3);
     for i = 1:numPoints
@@ -397,11 +405,18 @@ function kClosest = findClosestPoseOnPath(H_current, pathTransforms)
     end
 end
 
-% ---------------------- Stage Cost Function (Point Cloud) ---------------
-function c = stageCostPointCloud(x, u, current_goal, ptCloud, collisionRadius, Delta_max)
-    dist_goal = norm(x - current_goal, 2);
+function c = stageCostPose(x, u, current_goal, ptCloud, collisionRadius)
+    % Convert the state and goal into homogeneous transforms.
+    H_x = trvec2tform(x(1:3)') * eul2tform(x(4:6)', 'XYZ');
+    H_goal = trvec2tform(current_goal(1:3)') * eul2tform(current_goal(4:6)', 'XYZ');
+    err = homogeneous_error(H_goal, H_x);
     
-    [~, dists] = findNearestNeighbors(ptCloud, x', 1);
+    % Weight the orientation and translation errors.
+    W = diag([50, 50, 50, 100, 100, 100]);
+    cost_pose = err' * W * err;
+    
+    % Add a penalty if the position is too close to an obstacle.
+    [~, dists] = findNearestNeighbors(ptCloud, x(1:3)', 1);
     nearestDist = dists(1);
     if nearestDist < collisionRadius
         penalty_obstacle = 1e2;
@@ -409,22 +424,41 @@ function c = stageCostPointCloud(x, u, current_goal, ptCloud, collisionRadius, D
         penalty_obstacle = 0;
     end
 
-    % Soft constraint on maximum step distance
-    % dt = 0.2;  
-    % step_size = norm(u,2)*dt;
-    % if step_size > Delta_max
-    %     penalty_step = 1e3 * (step_size - Delta_max)^2;
-    % else
-        penalty_step = 0;
-    % end
-
-    % Control usage penalty
+    % Control effort penalty.
     penalty_control = 0.1 * (u.' * u);
+    
+    % ---------------------- New: Visibility Reward ----------------------
+    % This term rewards (i.e. subtracts cost) for viewing more of the point cloud.
+    % It is scaled by the distance-to-goal so that near the cut point the term fades.
+    fov = 60; 
+    max_range = 0.3; 
+    min_range = 0.0; 
+    Rwc = eul2rotm(x(4:6)', 'XYZ');
+    ptCloud_camera = transformPointCloud(ptCloud, x(1:3), Rwc);
+    visible_bool = isPointInFOV(ptCloud_camera, fov, max_range, min_range);
+    count_visible = sum(visible_bool);
 
-    c = 100*dist_goal^2 + penalty_obstacle + penalty_step + penalty_control;
+    % Scale the reward based on distance to goal (diminish near the goal).
+    d = norm(x(1:3) - current_goal(1:3));
+    d_thresh = 0.05; % if d < 0.2, scale < 1.
+    scale = min(1, d / d_thresh);
+
+    w_visibility = 100;  % Tuning parameter (adjust as needed)
+    if(ptCloud.Count > 0)
+        cost_visibility = w_visibility * (1 - count_visible / ptCloud.Count)*scale;
+    else
+        cost_visibility = 
+    end
+    % ---------------------------------------------------------------------
+    c = cost_pose + penalty_obstacle + penalty_control + cost_visibility;
 end
 
-% ---------------------- Hex to RGB Helper -------------------------------
+function c = terminalCostPose(x, current_goal)
+    H_x = trvec2tform(x(1:3)') * eul2tform(x(4:6)', 'XYZ');
+    H_goal = trvec2tform(current_goal(1:3)') * eul2tform(current_goal(4:6)', 'XYZ');
+    c = norm(homogeneous_error(H_goal, H_x))^2;
+end
+
 function rgb = hex2rgb(hexStr)
     hexStr = strrep(hexStr,'#','');
     if length(hexStr) ~= 6
@@ -436,51 +470,12 @@ function rgb = hex2rgb(hexStr)
     rgb = [r, g, b];
 end
 
-% ---------------------- Sample Camera Orientations ----------------------
-function best_orientation = sampleCameraOrientations(position, ptCloud, ax)
-    angle_increment = deg2rad(45);
-    roll_angles = [0]; 
-    pitch_angles = [0];
-    yaw_angles = 0:angle_increment:(2*pi - angle_increment);
-
-    max_visible = 0;
-    best_orientation = [0, 0, 0];
-
-    for roll = roll_angles
-        for pitch = pitch_angles
-            for yaw = yaw_angles
-                orientation = [roll, pitch, yaw];
-                visible_points = calculateVisiblePoints(position, orientation, ptCloud);
-                if visible_points > max_visible
-                    max_visible = visible_points;
-                    best_orientation = orientation;
-                end
-            end
-        end
-    end
-
-    visualizeCameraFrustum(position, best_orientation, ptCloud, ax);
-end
-
-% ---------------------- Calculate Visible Points ------------------------
-function visible_points = calculateVisiblePoints(position, orientation, ptCloud)
-    fov = 45; 
-    max_range = 0.2; 
-    min_range = 0.0; 
-
-    Rwc = eul2rotm(orientation, 'XYZ'); 
-    ptCloud_camera = transformPointCloud(ptCloud, position, Rwc);
-    in_fov = isPointInFOV(ptCloud_camera, fov, max_range, min_range);
-    visible_points = sum(in_fov);
-end
-
-% ---------------------- Visualize Camera Frustum -----------------------
 function visualizeCameraFrustum(position, orientation, ptCloud, ax)
     fov = 60; 
-    max_range = 0.2; 
+    max_range = 0.3; 
     min_range = 0.0; 
 
-    Rwc = eul2rotm(orientation, 'XYZ');
+    Rwc = eul2rotm(reshape(orientation,[1,3]), 'XYZ');
     ptCloud_camera = transformPointCloud(ptCloud, position, Rwc);
 
     in_fov = isPointInFOV(ptCloud_camera, fov, max_range, min_range);
@@ -531,7 +526,7 @@ function plotFrustumEdges(position, orientation, fov, max_range, ax)
         max_range,  half_width, -half_height
     ];
 
-    Rwc = eul2rotm(orientation, 'XYZ');
+    Rwc = eul2rotm(reshape(orientation,[1,3]), 'XYZ');
     frustum_corners_world = (Rwc * frustum_corners_camera')' + position';
 
     light_grey = [0.7, 0.7, 0.7];
@@ -541,7 +536,8 @@ function plotFrustumEdges(position, orientation, fov, max_range, ax)
         2 3; 3 4; 4 5; 5 2
     ];
     for eIdx = 1:size(edges,1)
-        idxA = edges(eIdx,1); idxB = edges(eIdx,2);
+        idxA = edges(eIdx,1); 
+        idxB = edges(eIdx,2);
         plot3(ax, ...
             [frustum_corners_world(idxA,1), frustum_corners_world(idxB,1)], ...
             [frustum_corners_world(idxA,2), frustum_corners_world(idxB,2)], ...
@@ -552,7 +548,6 @@ end
 
 function e = homogeneous_error(H1, H2)
     e = zeros(6,1);
-
     R1 = H1(1:3, 1:3);
     R2 = H2(1:3, 1:3);
     Re = R1 * R2';

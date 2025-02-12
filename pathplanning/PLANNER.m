@@ -15,10 +15,12 @@ classdef PLANNER < handle
         weights        % Weights after importance sampling
         nu
         R
+        deltaPosMax    % Maximum allowed position change per step
+        deltaOrientMax % Maximum allowed orientation change per step
     end
     
     methods
-        function self = PLANNER(model, N, I, dt, lambda, sigma_epsilon, nu, R, n_states,n_actions,stage_cost, terminal_cost)
+        function self = PLANNER(model, N, I, dt, lambda, sigma_epsilon, nu, R, n_states, n_actions, stage_cost, terminal_cost, deltaPosMax, deltaOrientMax)
             self.model = model;
             self.N = N;
             self.I = I;
@@ -32,48 +34,15 @@ classdef PLANNER < handle
             self.terminal_cost = terminal_cost;
             self.nu = nu;
             self.R = R;
+            self.deltaPosMax = deltaPosMax;
+            self.deltaOrientMax = deltaOrientMax;
         end
 
         function [] = set_action(self, U)
             self.U = U;
         end
-        
-        function [U_opt] = get_action(self, x0)
-            S = zeros(1, self.I);
-            epsilons = zeros(self.n_actions, self.N, self.I);
-            self.rollouts = zeros(self.n_states, self.N, self.I);
-            
-            % Rollouts
-            for i = 1:self.I
-                x = x0;
-                epsilons(:, :, i) = mvnrnd(zeros(1,self.n_actions), self.sigma_epsilon,self.N).';
-                for k = 1:self.N
-                    x = self.model.step(self.U(:, k) + epsilons(:, k, i), self.dt, x);
-                    self.rollouts(:, k, i) = x;
-                    q_cost = self.stage_cost(x,self.U(:, k) + epsilons(:, k, i));
-                    S(i) = S(i) + q_cost + self.lambda * self.U(:, k)' * (self.sigma_epsilon \ epsilons(:, k, i));
-                    % S(i) = S(i) + q_cost + (1-1/self.nu)/2 * epsilons(:, k, i)'*self.R*epsilons(:, k, i) + (self.U(:, k) + epsilons(:, k, i))'*self.R*epsilons(:, k, i) + 1/2*(self.U(:, k) + epsilons(:, k, i))'*self.R*(self.U(:, k) + epsilons(:, k, i));
-                end
-                % Add terminal cost
-                S(i) = S(i) + self.terminal_cost(x,self.U(:, k) + epsilons(:, self.N, i));
-            end
-            
-            % Importance sampling
-            beta = min(S);
-            self.weights = exp(-1 / self.lambda * (S - beta));
-            self.weights = self.weights / sum(self.weights);
-            U_opt = self.U;
-            for k = 1:self.N
-                du = 0;
-                for i = 1:self.I
-                    du = du + self.weights(i) * epsilons(:, k, i);
-                end
-                U_opt(:,k) = U_opt(:,k) + du;
-            end
-            self.U(:,1:end-1) = U_opt(:,2:end);
-        end
 
-        function [U_opt] = get_action_fmincon(self, x0)
+        function [U_opt] = get_action(self, x0)
             % GET_ACTION_FMINCON Solve a direct optimization problem using fmincon
             % to find the control sequence over the horizon.
             %
@@ -87,19 +56,26 @@ classdef PLANNER < handle
             costFun = @(Uvar) trajectory_cost(Uvar, x0, self.model, ...
                 self.stage_cost, self.terminal_cost, self.N, self.dt, ...
                 self.n_actions);
-            
-            % (Optional) define bounds or constraints on U
-            % Example: let each control be within [-1, 1] in every dimension
-            lb = -1 * ones(self.n_actions*self.N, 1);
-            ub =  1 * ones(self.n_actions*self.N, 1);
-            
+
+            % ----------------- Updated bounds for position and orientation ----------------
+            % For each control step, the first 3 entries (position) have bounds ±deltaPosMax
+            % and the last 3 entries (orientation) have bounds ±deltaOrientMax.
+            lb_step = [-self.deltaPosMax; -self.deltaPosMax; -self.deltaPosMax; ...
+                       -self.deltaOrientMax; -self.deltaOrientMax; -self.deltaOrientMax];
+            ub_step = [ self.deltaPosMax;  self.deltaPosMax;  self.deltaPosMax; ...
+                        self.deltaOrientMax;  self.deltaOrientMax;  self.deltaOrientMax];
+            lb = repmat(lb_step, self.N, 1);
+            ub = repmat(ub_step, self.N, 1);
+            % ----------------------------------------------------------------------------------
+
             % If needed, linear or nonlinear constraints go here
             A = []; b = [];
             Aeq = []; beq = [];
             nonlcon = [];  % or define a function handle for state constraints
             
             % Solve the NLP
-            [Usol, fval, exitflag] = fmincon(costFun, U0, A, b, Aeq, beq, lb, ub, nonlcon);
+            options = optimoptions('fmincon', 'Display', 'off'); %,'MaxIterations',100,'MaxFunctionEvaluations',100);
+            [Usol, fval, exitflag] = fmincon(costFun, U0, A, b, Aeq, beq, lb, ub, nonlcon, options);
             
             % Reshape solution into (n_actions x N)
             U_mat = reshape(Usol, [self.n_actions, self.N]);
