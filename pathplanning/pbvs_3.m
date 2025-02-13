@@ -448,10 +448,9 @@ function c = stageCostPose(x, u, current_goal, ptCloud, collisionRadius)
     w_visibility = 10;  % Tuning parameter (adjust as needed)
     % cost_visibility = w_visibility * (1 - count_visible / ptCloud.Count)*scale;
     alpha = 5; % tuning parameter to control the saturation rate
-    cost_visibility = w_visibility * exp(-alpha * (count_visible / ptCloud.Count))*scale;
-
+    cost_visibility = w_visibility * exp(-alpha * (count_visible / ptCloud.Count))*scale
     % ---------------------------------------------------------------------
-    c = cost_pose + penalty_obstacle + penalty_control + cost_visibility;
+    c = cost_pose + penalty_obstacle + penalty_control + double(cost_visibility);
 end
 
 function c = terminalCostPose(x, current_goal)
