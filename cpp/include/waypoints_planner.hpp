@@ -13,7 +13,8 @@
 #include <vector>
 
 /**
- * @brief Builds a 4x4 homogeneous transform from a position and ZYX Euler angles.
+ * @brief Builds a 4x4 homogeneous transform from a position and ZYX Euler
+ * angles.
  *
  * @tparam Scalar The scalar type.
  * @param p The position vector.
@@ -34,8 +35,8 @@ Eigen::Transform<Scalar, 3, Eigen::Isometry> eulerZYXToIsometry(const Eigen::Mat
 /**
  * @brief Computes the 6D homogeneous error between two transforms.
  *
- * The error vector consists of 6 elements where the first 3 represent the translational error
- * and the last 3 represent the rotational error.
+ * The error vector consists of 6 elements where the first 3 represent the
+ * translational error and the last 3 represent the rotational error.
  *
  * @tparam Scalar The scalar type.
  * @param H1 The first homogeneous transform.
@@ -68,14 +69,15 @@ Eigen::Matrix<Scalar, 6, 1> homogeneousError(const Eigen::Transform<Scalar, 3, E
 }
 
 /**
- * @brief Helper function to compute the number of points visible from a given pose
- *        under the new coordinate mapping (X forward, Y left, Z up).
+ * @brief Helper function to compute the number of points visible from a given
+ * pose under the new coordinate mapping (X forward, Y left, Z up).
  *
  * @param cloud      The (downsampled) obstacle cloud.
  * @param fov_degs   Field of view in degrees (horizontal & vertical).
  * @param near_plane Near plane distance for frustum culling.
  * @param far_plane  Far plane distance for frustum culling.
- * @param pose       The pose in world coordinates (where we consider X forward, Y left, Z up).
+ * @param pose       The pose in world coordinates (where we consider X forward,
+ * Y left, Z up).
  * @return The number of points in the cloud that lie within the camera frustum.
  */
 template <typename Scalar>
@@ -100,7 +102,8 @@ std::size_t getVisibleCount(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& clou
     Eigen::Matrix4f camera_pose = pose.matrix().template cast<float>();
     Eigen::Matrix4f cam2robot;
     cam2robot << 1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1;
-    // cam2robot << 0, 0, 1, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1; // X right, Y down, Z forward
+    // cam2robot << 0, 0, 1, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1; // X right, Y
+    // down, Z forward
     camera_pose = camera_pose * cam2robot;
 
     // Apply the transform in PCL
@@ -113,14 +116,14 @@ std::size_t getVisibleCount(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& clou
     return cloud_out->size();
 }
 
-
 /**
  * @brief PlannerMpc class implementing an NLMPC-style trajectory planner.
  *
- * This class is templated on the state dimension (StateDim), action dimension (ActionDim),
- * horizon (HorizonDim), and the scalar type (Scalar). For the simple integrator used here,
- * it is assumed that StateDim == ActionDim, and that the first 3 entries of the state vector
- * represent the position while the last 3 represent the Euler angles.
+ * This class is templated on the state dimension (StateDim), action dimension
+ * (ActionDim), horizon (HorizonDim), and the scalar type (Scalar). For the
+ * simple integrator used here, it is assumed that StateDim == ActionDim, and
+ * that the first 3 entries of the state vector represent the position while the
+ * last 3 represent the Euler angles.
  *
  * @tparam StateDim The dimension of the state vector.
  * @tparam ActionDim The dimension of the action (control) vector.
@@ -146,7 +149,6 @@ public:
     Scalar w_p_term = Scalar(1e3);
     /// Terminal orientation cost weight.
     Scalar w_q_term = Scalar(1e3);
-
 
     /// Visibility cost weight.
     Scalar w_visibility = Scalar(20.0);
@@ -177,15 +179,17 @@ public:
     Scalar dtheta_min = Scalar(-0.1);
     Scalar dtheta_max = Scalar(0.1);
 
-    /// Maintained control sequence for warm-starting (size: ActionDim * HorizonDim).
+    /// Maintained control sequence for warm-starting (size: ActionDim *
+    /// HorizonDim).
     std::vector<Scalar> U;
 
     /// Convergence criteria for waypoint generation: position tolerance (1 mm).
-    const double position_tolerance = 1e-2;
-    /// Convergence criteria for waypoint generation: orientation tolerance (~0.057 deg).
-    const double orientation_tolerance = 1e-3;
+    double position_tolerance = 1e-2;
+    /// Convergence criteria for waypoint generation: orientation tolerance
+    /// (~0.057 deg).
+    double orientation_tolerance = 1e-2;
     /// Maximum number of iterations for waypoint generation.
-    const int max_iterations = 100;
+    int max_iterations = 100;
 
     /**
      * @brief Default constructor.
@@ -214,16 +218,18 @@ public:
     /**
      * @brief Rollouts the trajectory using the given control sequence.
      *
-     * Converts a std::vector<Scalar> control sequence (length = ActionDim * HorizonDim)
-     * into a dynamic Eigen representation and integrates the trajectory starting from H_0.
-     * Each state is represented as an Eigen::Matrix<Scalar, StateDim, 1>.
+     * Converts a std::vector<Scalar> control sequence (length = ActionDim *
+     * HorizonDim) into a dynamic Eigen representation and integrates the
+     * trajectory starting from H_0. Each state is represented as an
+     * Eigen::Matrix<Scalar, StateDim, 1>.
      *
      * @param U_in The control sequence.
      * @return A vector of state vectors representing the trajectory.
      */
     std::vector<Eigen::Matrix<Scalar, StateDim, 1>> rollout(const std::vector<Scalar>& U_in) {
         std::vector<Eigen::Matrix<Scalar, StateDim, 1>> trajectory(HorizonDim + 1);
-        // Convert H_0 into a state vector: first 3 entries: translation; next 3: Euler angles (from ZYX).
+        // Convert H_0 into a state vector: first 3 entries: translation; next 3:
+        // Euler angles (from ZYX).
         Eigen::Matrix<Scalar, StateDim, 1> s0;
         Eigen::Matrix<Scalar, 3, 1> p0       = H_0.translation();
         Eigen::Matrix<Scalar, 3, 1> eulerZYX = H_0.rotation().eulerAngles(2, 1, 0);
@@ -293,7 +299,8 @@ public:
 
     /**
      * @brief Computes a visibility cost based on the fraction of obstacle points
-     *        that lie within the camera frustum of the current pose (X forward, Y left, Z up).
+     *        that lie within the camera frustum of the current pose (X forward, Y
+     * left, Z up).
      *
      * @param p   The current position (x,y,z).
      * @param eul The current ZYX Euler angles (roll, pitch, yaw).
@@ -317,7 +324,8 @@ public:
     }
 
     /**
-     * @brief Computes the total cost along the trajectory induced by the control sequence.
+     * @brief Computes the total cost along the trajectory induced by the control
+     * sequence.
      *
      * @param x The control sequence.
      * @param grad The gradient of the cost (if required).
@@ -352,7 +360,8 @@ public:
     }
 
     /**
-     * @brief Solves the MPC problem using NLopt and returns the optimized control sequence.
+     * @brief Solves the MPC problem using NLopt and returns the optimized control
+     * sequence.
      *
      * @param H0_in The initial pose.
      * @return The optimized control sequence.
@@ -423,18 +432,23 @@ public:
 
         return U_opt;
     }
-
     /**
-     * @brief Generates waypoints by running the MPC loop from the initial pose to the goal pose.
+     * @brief Generates waypoints by running the MPC loop from the initial pose to
+     * the goal pose, while also computing time statistics and visibility metrics.
      *
-     * Runs the MPC loop starting from the initial pose until the convergence criteria or the maximum
-     * number of iterations is reached. Returns a vector of waypoints representing the trajectory.
+     * Runs the MPC loop starting from the initial pose until the convergence
+     * criteria or the maximum number of iterations is reached. Returns a vector
+     * of waypoints representing the trajectory.
      *
      * @param init The initial pose.
      * @param goal The goal pose.
-     * @return A vector of IsometryT waypoints representing the planned trajectory.
+     * @return A vector of IsometryT waypoints representing the planned
+     *         trajectory.
      */
     std::vector<IsometryT> generateWaypoints(const IsometryT& init, const IsometryT& goal) {
+        // Start timer
+        auto start_time = std::chrono::high_resolution_clock::now();
+
         H_0    = init;
         H_goal = goal;
 
@@ -463,6 +477,31 @@ public:
                 waypoints.push_back(H_0);
             }
         }
+
+        // End timer
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto planning_duration_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+
+        // Compute visibility metric across all generated waypoints
+        double sum_visible = 0.0;
+        if (obstacle_cloud && !obstacle_cloud->points.empty()) {
+            for (const auto& wp : waypoints) {
+                std::size_t visible_count =
+                    getVisibleCount(obstacle_cloud, visibility_fov, visibility_min_range, visibility_max_range, wp);
+                sum_visible += static_cast<double>(visible_count);
+            }
+        }
+        double avg_visible_per_waypoint =
+            (waypoints.empty()) ? 0.0 : (sum_visible / static_cast<double>(waypoints.size()));
+
+        // Print out the results
+        std::cout << "[PlannerMpc::generateWaypoints] "
+                  << "Planning took " << planning_duration_ms << " ms. "
+                  << "Number of waypoints: " << waypoints.size() << "\n";
+        std::cout << "[PlannerMpc::generateWaypoints] "
+                  << "Average visible points per waypoint: " << avg_visible_per_waypoint << "\n";
+
         return waypoints;
     }
 };
