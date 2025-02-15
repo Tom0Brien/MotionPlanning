@@ -3,10 +3,16 @@
 
 #include <Eigen/Dense>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <fstream>
 #include <iostream>
+#include <limits>
 #include <nlopt.hpp>
+#include <pcl/conversions.h>  // For converting polygon meshes to point clouds
+#include <pcl/filters/crop_box.h>
 #include <pcl/filters/frustum_culling.h>
+#include <pcl/io/vtk_lib_io.h>  // For loading STL files
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -101,9 +107,8 @@ std::size_t getVisibleCount(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& clou
     // Rotate camera so that PCL "camera" aligns with X forward, Y left, Z up.
     Eigen::Matrix4f camera_pose = pose.matrix().template cast<float>();
     Eigen::Matrix4f cam2robot;
-    cam2robot << 1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1;
-    // cam2robot << 0, 0, 1, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1; // X right, Y
-    // down, Z forward
+    // cam2robot << 1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1;
+    cam2robot << 0, 0, 1, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1;  // X right, Y down, Z forward
     camera_pose = camera_pose * cam2robot;
 
     // Apply the transform in PCL
@@ -114,6 +119,66 @@ std::size_t getVisibleCount(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& clou
     fc.filter(*cloud_out);
 
     return cloud_out->size();
+}
+
+// Helper function to extract the points that lie inside the collision box.
+template <typename Scalar>
+pcl::PointCloud<pcl::PointXYZ>::Ptr extractPointsInBox(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& cloud,
+                                                       const Eigen::Transform<Scalar, 3, Eigen::Isometry>& pose,
+                                                       const Eigen::Vector4f& box_min,
+                                                       const Eigen::Vector4f& box_max) {
+
+    pcl::CropBox<pcl::PointXYZ> crop_filter;
+    crop_filter.setInputCloud(cloud);
+    // Note: We pass the *inverse* of the pose so that the points are transformed into the box’s frame.
+    crop_filter.setTransform(pose.inverse().template cast<float>());
+    crop_filter.setMin(box_min);
+    crop_filter.setMax(box_max);
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr in_box(new pcl::PointCloud<pcl::PointXYZ>());
+    crop_filter.filter(*in_box);
+    return in_box;
+}
+
+/**
+ * @brief Returns how many obstacle points lie within a user-defined box in
+ *        the camera/end-effector coordinate frame.
+ *
+ * @param cloud        The obstacle cloud.
+ * @param pose         The camera/EE pose in world coordinates.
+ * @param box_min      The minimum corner of the box in camera coords.
+ * @param box_max      The maximum corner of the box in camera coords.
+ * @return             Number of points inside that box.
+ */
+template <typename Scalar>
+std::size_t getPointsInBox(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& cloud,
+                           const Eigen::Transform<Scalar, 3, Eigen::Isometry>& pose,
+                           const Eigen::Vector4f& box_min,
+                           const Eigen::Vector4f& box_max) {
+    if (!cloud || cloud->empty()) {
+        return 0;
+    }
+
+    // Create a CropBox filter
+    pcl::CropBox<pcl::PointXYZ> crop_filter;
+    crop_filter.setInputCloud(cloud);
+
+    // We want the box to be defined in the "camera frame."
+    // By providing the *inverse* of the camera's world pose,
+    // PCL will transform each point into the camera frame before checking.
+    crop_filter.setTransform(pose.inverse().template cast<float>());
+
+    // Define the bounding box extents (in camera coords).
+    crop_filter.setMin(box_min);
+    crop_filter.setMax(box_max);
+
+    // Filter the cloud
+    pcl::PointCloud<pcl::PointXYZ>::Ptr in_box(new pcl::PointCloud<pcl::PointXYZ>());
+    crop_filter.filter(*in_box);
+
+    std::cout << "[PlannerMpc::getPointsInBox] Points in box: " << in_box->size() << std::endl;
+
+    return in_box->size();
 }
 
 /**
@@ -161,7 +226,7 @@ public:
     /// Max plane distance for the visibility frustum.
     Scalar visibility_max_range = Scalar(0.5);
     /// Distance from goal to begin diminishing visibility cost term
-    Scalar d_thresh = 0.1;
+    Scalar d_thresh = Scalar(0.1);
 
     /// Obstacle avoidance cost weight.
     Scalar w_obs = Scalar(5.0);
@@ -171,6 +236,9 @@ public:
     std::shared_ptr<pcl::KdTreeFLANN<pcl::PointXYZ>> kd_tree;
     /// Safety margin for collision avoidance.
     Scalar collision_margin = Scalar(0.05);
+    // Box dimensions for collision checking (min and max in camera/end-effector frame).
+    Eigen::Vector4f box_min = Eigen::Vector4f(-0.08, -0.08, -0.08, 1);
+    Eigen::Vector4f box_max = Eigen::Vector4f(0.08, 0.08, 0.08, 1);
 
     /// Control bounds for position.
     Scalar dp_min = Scalar(-0.1);
@@ -179,17 +247,18 @@ public:
     Scalar dtheta_min = Scalar(-0.1);
     Scalar dtheta_max = Scalar(0.1);
 
-    /// Maintained control sequence for warm-starting (size: ActionDim *
-    /// HorizonDim).
+    /// Maintained control sequence for warm-starting (size: ActionDim * HorizonDim).
     std::vector<Scalar> U;
 
-    /// Convergence criteria for waypoint generation: position tolerance (1 mm).
+    /// Convergence criteria for waypoint generation: position tolerance (1 cm).
     double position_tolerance = 1e-2;
-    /// Convergence criteria for waypoint generation: orientation tolerance
-    /// (~0.057 deg).
+    /// Convergence criteria for waypoint generation: orientation tolerance (~0.057 deg).
     double orientation_tolerance = 1e-2;
     /// Maximum number of iterations for waypoint generation.
-    int max_iterations = 100;
+    int max_iterations = 20;
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr collision_debug_cloud =
+        pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>());
 
     /**
      * @brief Default constructor.
@@ -218,18 +287,16 @@ public:
     /**
      * @brief Rollouts the trajectory using the given control sequence.
      *
-     * Converts a std::vector<Scalar> control sequence (length = ActionDim *
-     * HorizonDim) into a dynamic Eigen representation and integrates the
-     * trajectory starting from H_0. Each state is represented as an
-     * Eigen::Matrix<Scalar, StateDim, 1>.
+     * Converts a std::vector<Scalar> control sequence (length = ActionDim * HorizonDim)
+     * into a dynamic Eigen representation and integrates the trajectory starting
+     * from H_0. Each state is represented as an Eigen::Matrix<Scalar, StateDim, 1>.
      *
      * @param U_in The control sequence.
      * @return A vector of state vectors representing the trajectory.
      */
     std::vector<Eigen::Matrix<Scalar, StateDim, 1>> rollout(const std::vector<Scalar>& U_in) {
         std::vector<Eigen::Matrix<Scalar, StateDim, 1>> trajectory(HorizonDim + 1);
-        // Convert H_0 into a state vector: first 3 entries: translation; next 3:
-        // Euler angles (from ZYX).
+        // Convert H_0 into a state vector: first 3 entries: translation; next 3: Euler angles (from ZYX).
         Eigen::Matrix<Scalar, StateDim, 1> s0;
         Eigen::Matrix<Scalar, 3, 1> p0       = H_0.translation();
         Eigen::Matrix<Scalar, 3, 1> eulerZYX = H_0.rotation().eulerAngles(2, 1, 0);
@@ -280,6 +347,18 @@ public:
     }
 
     /**
+     * @brief Returns a collision cost if any obstacle points lie in a
+     *        bounding box around the camera/EE.
+     *
+     * @param pose Current camera/EE pose in the world frame.
+     * @return Collision cost (0 if empty, >0 if some points found).
+     */
+    Scalar boxCollisionCost(const Eigen::Transform<Scalar, 3, Eigen::Isometry>& pose) {
+        // If ANY points appear in the box, we add a penalty.
+        return getPointsInBox<Scalar>(obstacle_cloud, pose, box_min, box_max) > 0 ? w_obs : Scalar(0);
+    }
+
+    /**
      * @brief Computes the pose cost based on the error relative to the goal pose.
      *
      * @param p The current position vector.
@@ -300,7 +379,7 @@ public:
     /**
      * @brief Computes a visibility cost based on the fraction of obstacle points
      *        that lie within the camera frustum of the current pose (X forward, Y
-     * left, Z up).
+     *        left, Z up).
      *
      * @param p   The current position (x,y,z).
      * @param eul The current ZYX Euler angles (roll, pitch, yaw).
@@ -335,11 +414,12 @@ public:
         auto traj   = rollout(x);
         Scalar cost = 0;
         for (int k = 0; k <= HorizonDim; ++k) {
-            auto p          = traj[k].template head<3>();
-            auto eul        = traj[k].template tail<3>();
-            double box_cost = boxCollisionCost(eulerZYXToIsometry<Scalar>(p, eul));
-            std::cout << "[PlannerMpc::cost] Box collision cost: " << box_cost << std::endl;
-            cost += poseCost(p, eul, w_p, w_q) + obstacleCost(p) + visibilityCost(p, eul);
+            auto p   = traj[k].template head<3>();
+            auto eul = traj[k].template tail<3>();
+            // double box_cost = boxCollisionCost(eulerZYXToIsometry<Scalar>(p, eul));
+            // std::cout << "[PlannerMpc::cost] Box collision cost: " << box_cost << std::endl;
+            cost += poseCost(p, eul, w_p, w_q) + boxCollisionCost(eulerZYXToIsometry<Scalar>(p, eul))
+                    + visibilityCost(p, eul);
         }
         // Terminal cost
         auto p_N   = traj[HorizonDim].template head<3>();
@@ -434,6 +514,7 @@ public:
 
         return U_opt;
     }
+
     /**
      * @brief Generates waypoints by running the MPC loop from the initial pose to
      * the goal pose, while also computing time statistics and visibility metrics.
@@ -444,8 +525,7 @@ public:
      *
      * @param init The initial pose.
      * @param goal The goal pose.
-     * @return A vector of IsometryT waypoints representing the planned
-     *         trajectory.
+     * @return A vector of IsometryT waypoints representing the planned trajectory.
      */
     std::vector<IsometryT> generateWaypoints(const IsometryT& init, const IsometryT& goal) {
         // Start timer
@@ -505,6 +585,104 @@ public:
                   << "Average visible points per waypoint: " << avg_visible_per_waypoint << std::endl;
 
         return waypoints;
+    }
+
+    /**
+     * @brief Updates the box dimensions used for collision checking based on an STL
+     *        model of the end effector.
+     *
+     * This method loads an STL file from the provided filepath, applies the given rigid
+     * transform to the model vertices, computes the axis-aligned bounding box, and updates
+     * the internal box dimensions (box_min and box_max) used for collision checking.
+     *
+     * @param stl_filepath The file path to the end effector STL file.
+     * @param Hce    The rigid transform to apply to the STL model.
+     */
+    /**
+     * @brief Updates the box dimensions used for collision checking based on an STL
+     *        model of the end effector.
+     *
+     * This method loads an STL file from the provided filepath, applies the given rigid
+     * transform to the model vertices, computes the axis-aligned bounding box, and updates
+     * the internal box dimensions (box_min and box_max) used for collision checking.
+     *
+     * @param stl_filepath The file path to the end effector STL file.
+     * @param Hce          The rigid transform to apply to the STL model.
+     * @param margin       An additional collision margin to expand the box (default is 0).
+     */
+    void updateEndEffectorBoxFromSTL(const std::string& stl_filepath,
+                                     const Eigen::Transform<Scalar, 3, Eigen::Isometry>& Hce,
+                                     Scalar margin = Scalar(0)) {
+        pcl::PolygonMesh mesh;
+        if (pcl::io::loadPolygonFileSTL(stl_filepath, mesh) == 0) {
+            std::cerr << "[PlannerMpc::updateEndEffectorBoxFromSTL] Failed to load STL file: " << stl_filepath
+                      << std::endl;
+            return;
+        }
+
+        // Convert the mesh to a point cloud.
+        pcl::PointCloud<pcl::PointXYZ> cloud;
+        pcl::fromPCLPointCloud2(mesh.cloud, cloud);
+        if (cloud.points.empty()) {
+            std::cerr << "[PlannerMpc::updateEndEffectorBoxFromSTL] STL file contains no points: " << stl_filepath
+                      << std::endl;
+            return;
+        }
+
+        // --- Apply scaling and re-centering similar to Python ---
+        // For example, set the desired scale factor:
+        float cutter_scale = 0.001f;
+        // Compute the centroid of the cloud.
+        Eigen::Vector4f centroid(0, 0, 0, 0);
+        for (const auto& pt : cloud.points) {
+            centroid += Eigen::Vector4f(pt.x, pt.y, pt.z, 1.0f);
+        }
+        centroid /= static_cast<float>(cloud.points.size());
+        // Translate points so that the centroid is at the origin and apply scaling.
+        for (auto& pt : cloud.points) {
+            pt.x = cutter_scale * (pt.x - centroid.x());
+            pt.y = cutter_scale * (pt.y - centroid.y());
+            pt.z = cutter_scale * (pt.z - centroid.z());
+        }
+        // --- End scaling and recentering ---
+
+        // Initialize bounding box (min and max) with extreme values.
+        Eigen::Vector4f min_pt(std::numeric_limits<float>::max(),
+                               std::numeric_limits<float>::max(),
+                               std::numeric_limits<float>::max(),
+                               1.0f);
+        Eigen::Vector4f max_pt(-std::numeric_limits<float>::max(),
+                               -std::numeric_limits<float>::max(),
+                               -std::numeric_limits<float>::max(),
+                               1.0f);
+
+        // Cast the provided transform to float for computation.
+        Eigen::Matrix4f Hce_f = Hce.matrix().template cast<float>();
+
+        // Compute the axis-aligned bounding box after applying the transform.
+        for (const auto& pt : cloud.points) {
+            Eigen::Vector4f p(pt.x, pt.y, pt.z, 1.0f);
+            Eigen::Vector4f p_transformed = Hce_f * p;
+            min_pt                        = min_pt.cwiseMin(p_transformed);
+            max_pt                        = max_pt.cwiseMax(p_transformed);
+        }
+
+        // Apply the collision margin: expand the box by subtracting the margin from min
+        // and adding it to max.
+        min_pt[0] -= margin;
+        min_pt[1] -= margin;
+        min_pt[2] -= margin;
+        max_pt[0] += margin;
+        max_pt[1] += margin;
+        max_pt[2] += margin;
+
+        // Update internal box dimensions.
+        box_min = min_pt;
+        box_max = max_pt;
+
+        std::cout << "[PlannerMpc::updateEndEffectorBoxFromSTL] Updated box dimensions:\n"
+                  << "  box_min: " << box_min.transpose() << "\n"
+                  << "  box_max: " << box_max.transpose() << std::endl;
     }
 };
 
