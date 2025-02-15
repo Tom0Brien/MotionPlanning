@@ -335,8 +335,10 @@ public:
         auto traj   = rollout(x);
         Scalar cost = 0;
         for (int k = 0; k <= HorizonDim; ++k) {
-            auto p   = traj[k].template head<3>();
-            auto eul = traj[k].template tail<3>();
+            auto p          = traj[k].template head<3>();
+            auto eul        = traj[k].template tail<3>();
+            double box_cost = boxCollisionCost(eulerZYXToIsometry<Scalar>(p, eul));
+            std::cout << "[PlannerMpc::cost] Box collision cost: " << box_cost << std::endl;
             cost += poseCost(p, eul, w_p, w_q) + obstacleCost(p) + visibilityCost(p, eul);
         }
         // Terminal cost
@@ -498,9 +500,9 @@ public:
         // Print out the results
         std::cout << "[PlannerMpc::generateWaypoints] "
                   << "Planning took " << planning_duration_ms << " ms. "
-                  << "Number of waypoints: " << waypoints.size() << "\n";
+                  << "Number of waypoints: " << waypoints.size() << std::endl;
         std::cout << "[PlannerMpc::generateWaypoints] "
-                  << "Average visible points per waypoint: " << avg_visible_per_waypoint << "\n";
+                  << "Average visible points per waypoint: " << avg_visible_per_waypoint << std::endl;
 
         return waypoints;
     }
