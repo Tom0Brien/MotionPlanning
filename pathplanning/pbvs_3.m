@@ -43,7 +43,7 @@ function example_3D_planning_with_pointcloud_PBVS()
 
     % (The following Delta_max was previously used as a single bound.)
     % Now we define separate bounds for position and orientation:
-    Delta_max_pos = 0.025;     % Maximum allowed position change per step
+    Delta_max_pos = 0.1;     % Maximum allowed position change per step
     Delta_max_orient = 1; % Maximum allowed orientation change (in radians) per step
 
     %% --------------------- PLANNER Hyperparameters -----------------------

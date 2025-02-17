@@ -19,8 +19,8 @@ int main() {
 
     // 1) Load original cloud
     pcl::PointCloud<pcl::PointXYZ>::Ptr originalCloud(new pcl::PointCloud<pcl::PointXYZ>);
-    if (pcl::io::loadPCDFile("../data/vine_simple.pcd", *originalCloud) == -1) {
-        PCL_ERROR("Couldn't read file vine_simple.pcd\n");
+    if (pcl::io::loadPCDFile("../data/vine_simple_streo_scan.pcd", *originalCloud) == -1) {
+        PCL_ERROR("Couldn't read file .pcd\n");
         return -1;
     }
 
@@ -40,36 +40,38 @@ int main() {
     planner.kd_tree        = kd_tree;
 
     // 5) Set weights, collision, and visibility settings
-    planner.w_p                  = 100.0;  // Positional tracking cost weight.
-    planner.w_q                  = 10.0;   // Orientation tracking cost weight.
-    planner.w_p_term             = 1e3;    // Terminal positional cost weight.
-    planner.w_q_term             = 1e3;    // Terminal orientation cost weight.
-    planner.w_obs                = 1e3;    // Obstacle avoidance cost weight.
-    planner.collision_margin     = 0.05;
-    planner.w_visibility         = 0.0;
-    planner.alpha_visibility     = 20.0;
-    planner.d_thresh             = 0.05;
+    planner.w_p                  = 1e3;   // Positional tracking cost weight.
+    planner.w_q                  = 10.0;  // Orientation tracking cost weight.
+    planner.w_p_term             = 1e3;   // Terminal positional cost weight.
+    planner.w_q_term             = 1e3;   // Terminal orientation cost weight.
+    planner.w_obs                = 1e4;   // Obstacle avoidance cost weight.
+    planner.collision_margin     = 0.015;
+    planner.w_visibility         = 0;  // 15.0;
+    planner.alpha_visibility     = 15.0;
+    planner.d_thresh             = 0.025;
     planner.visibility_fov       = 60.0;  // Field of view in degrees.
     planner.visibility_min_range = 0.0;
     planner.visibility_max_range = 0.5;
+    planner.max_iterations       = 10;
 
     // 6) Set control bounds
     planner.dp_max     = 0.05;
     planner.dp_min     = -0.05;
-    planner.dtheta_max = 1.0;
-    planner.dtheta_min = -1.0;
+    planner.dtheta_max = 0.15;
+    planner.dtheta_min = -0.15;
 
     // 7) Update the collision box from the STL model of the end effector.
     // Here we load the STL file from "../data/cutter.stl" and apply a rigid transform to it to position it correctly in
     // the camera frame. Modify cutter_transform if a different pose is desired.
     Eigen::Isometry3d cutter_transform = Eigen::Isometry3d::Identity();
-    cutter_transform.translation()     = Eigen::Vector3d(0.0, 0.05, 0.05);
+    cutter_transform.translation()     = Eigen::Vector3d(0.0, 0.075, 0.03);
     Eigen::AngleAxisd Rzc(M_PI_2, Eigen::Vector3d::UnitZ());
     Eigen::AngleAxisd Ryc(0, Eigen::Vector3d::UnitY());
     Eigen::AngleAxisd Rxc(M_PI_2, Eigen::Vector3d::UnitX());
     cutter_transform.linear() = (Rzc * Ryc * Rxc).matrix();
-    double collision_margin   = 0.01;
+    double collision_margin   = 0.005;
     planner.updateEndEffectorBoxFromSTL("../data/cutter.stl", cutter_transform, collision_margin);
+    planner.updateEndEffectorMeshFromSTL("../data/cutter.stl", cutter_transform, collision_margin);
 
     // Save the box dimensions to a file for later visualization.
     std::ofstream box_file("cutter_box.txt");
@@ -104,7 +106,7 @@ int main() {
 
     // 8) Set the initial pose
     Eigen::Isometry3d H_0 = Eigen::Isometry3d::Identity();
-    H_0.translation()     = Eigen::Vector3d(0.0, 0.5, 0.6);
+    H_0.translation()     = Eigen::Vector3d(0.3, 0.3, 0.725);
     double r1 = -M_PI_2, p1 = 0, yaw1 = 0;
     Eigen::AngleAxisd Rz0(yaw1, Eigen::Vector3d::UnitZ());
     Eigen::AngleAxisd Ry0(p1, Eigen::Vector3d::UnitY());
@@ -116,26 +118,41 @@ int main() {
     std::vector<Eigen::Isometry3d> goals;
     {
         // Goal 1
-        double x1 = 0.23958, y1 = 0.55, z1 = 0.6098;
-        double r1 = -M_PI_2, p1 = 0, yaw1 = 0;
-        Eigen::AngleAxisd Rz1(yaw1, Eigen::Vector3d::UnitZ());
-        Eigen::AngleAxisd Ry1(p1, Eigen::Vector3d::UnitY());
-        Eigen::AngleAxisd Rx1(r1, Eigen::Vector3d::UnitX());
-        Eigen::Isometry3d G1 = Eigen::Isometry3d::Identity();
-        G1.translation()     = Eigen::Vector3d(x1, y1, z1);
-        G1.linear()          = (Rz1 * Ry1 * Rx1).matrix();
-        goals.push_back(G1);
+        // double x1 = 0.0, y1 = 0.5, z1 = 0.6;
+        // double r1 = -M_PI_2, p1 = 0, yaw1 = 0;
+        // Eigen::AngleAxisd Rz1(yaw1, Eigen::Vector3d::UnitZ());
+        // Eigen::AngleAxisd Ry1(p1, Eigen::Vector3d::UnitY());
+        // Eigen::AngleAxisd Rx1(r1, Eigen::Vector3d::UnitX());
+        // Eigen::Isometry3d G1 = Eigen::Isometry3d::Identity();
+        // G1.translation()     = Eigen::Vector3d(x1, y1, z1);
+        // G1.linear()          = (Rz1 * Ry1 * Rx1).matrix();
+        // goals.push_back(G1);
+        // goals.push_back(G1);
 
         // Goal 2
-        double x2 = 0.53975, y2 = 0.9, z2 = 0.75;
-        double r2 = -M_PI_2, p2 = 0, yaw2 = 0;
-        Eigen::AngleAxisd Rz2(yaw2, Eigen::Vector3d::UnitZ());
-        Eigen::AngleAxisd Ry2(p2, Eigen::Vector3d::UnitY());
-        Eigen::AngleAxisd Rx2(r2, Eigen::Vector3d::UnitX());
-        Eigen::Isometry3d G2 = Eigen::Isometry3d::Identity();
-        G2.translation()     = Eigen::Vector3d(x2, y2, z2);
-        G2.linear()          = (Rz2 * Ry2 * Rx2).matrix();
-        goals.push_back(G2);
+        // double x2 = 0.53975, y2 = 0.6, z2 = 0.725;
+        // double r2 = -M_PI_2, p2 = 0, yaw2 = 0;
+        // Eigen::AngleAxisd Rz2(yaw2, Eigen::Vector3d::UnitZ());
+        // Eigen::AngleAxisd Ry2(p2, Eigen::Vector3d::UnitY());
+        // Eigen::AngleAxisd Rx2(r2, Eigen::Vector3d::UnitX());
+        // Eigen::Isometry3d G2 = Eigen::Isometry3d::Identity();
+        // G2.translation()     = Eigen::Vector3d(x2, y2, z2);
+        // G2.linear()          = (Rz2 * Ry2 * Rx2).matrix();
+        // goals.push_back(G2);
+        // Example: Goal(from the real robot)
+        Eigen::Isometry3d H_goal_1;
+        H_goal_1.linear() << 0.9907284963734801, 0.01923310699281764, -0.13441684452520866, 0.1337577243239575,
+            0.032219489672272936, 0.9904804604618397, 0.02338085880431727, -0.9992957480549294, 0.029348189933893397;
+        H_goal_1.translation() << 0.243274508481936, 0.44056617285391136, 0.6743629428023914;
+
+        Eigen::Isometry3d H_goal_2;
+        H_goal_2.linear() << 0.7143149855728739, 0.6505352486054033, -0.2579668320649915, 0.2374895719947491,
+            0.12140501343054791, 0.9637637452113067, 0.6582807542993981, -0.7497097525281597, -0.06777391734167852;
+        H_goal_2.translation() << 0.33265150045528724, 0.4465883461369802, 0.7110606089369389;
+
+
+        goals.emplace_back(H_goal_1);
+        goals.emplace_back(H_goal_2);
     }
 
     // Write goals to "goals.csv"
@@ -232,7 +249,7 @@ int main() {
         for (const auto& wp : waypoints_for_goal) {
             // Extract the points that are inside the collision box at this waypoint.
             pcl::PointCloud<pcl::PointXYZ>::Ptr in_box =
-                extractPointsInBox<double>(planner.obstacle_cloud, wp, planner.box_min, planner.box_max);
+                extractPointsInBox<double>(originalCloud, wp, planner.box_min, planner.box_max);
 
             // Append these points to the collision debug cloud.
             collision_debug_cloud->points.insert(collision_debug_cloud->points.end(),

@@ -19,9 +19,13 @@ def load_trajectory_euler(filename):
 
 def load_goals_euler(filename):
     data = np.loadtxt(filename, delimiter=",", skiprows=1)
+    # Ensure data is 2D (in case there's only one goal)
+    if data.ndim == 1:
+        data = data.reshape(1, -1)
     positions = data[:, 0:3]
     eulers = data[:, 3:6]
     return positions, eulers
+
 
 def load_obstacles(filename):
     data = np.loadtxt(filename, delimiter=",", skiprows=1)
@@ -161,39 +165,32 @@ def load_box_dimensions(filename):
     max_vals = np.array([float(x) for x in lines[1].split()])
     return min_vals, max_vals
 
-def create_cutter_bbox(box_min, box_max, T_wp):
+def create_cutter_obb(box_min, box_max, T_wp):
     """
     Given the saved box dimensions (box_min and box_max) from the C++ code—which 
-    represent the cutter's bounding box in the initial world coordinates—and a 
-    waypoint transform T_wp (4x4), this function computes the 8 corners of the box,
-    applies T_wp to them, and then creates an AxisAlignedBoundingBox from the transformed
-    points.
+    represent the cutter's bounding box in the cutter's local (initial) frame—and 
+    a waypoint transform T_wp (4x4), this function computes the oriented bounding box.
+    The local box is defined by its minimum and maximum points (using only x,y,z),
+    and the OBB is obtained by transforming the box center and using T_wp's rotation.
     """
     # Use only the x,y,z components.
     min_bound = box_min[:3]
     max_bound = box_max[:3]
     
-    # Compute the 8 corners of the original box.
-    corners = []
-    for x in [min_bound[0], max_bound[0]]:
-        for y in [min_bound[1], max_bound[1]]:
-            for z in [min_bound[2], max_bound[2]]:
-                corner = np.array([x, y, z, 1.0])  # homogeneous coordinate
-                corners.append(corner)
-    corners = np.array(corners)  # shape (8,4)
+    # Compute the local center and full extents.
+    local_center = (min_bound + max_bound) / 2.0
+    extent = max_bound - min_bound  # Full sizes along each axis
     
-    # Apply the waypoint transform to each corner.
-    # (T_wp is 4x4; apply it to each corner as a 4-element vector)
-    transformed_corners = (T_wp @ corners.T).T  # shape (8,4)
+    # Transform the local center to the world frame using T_wp.
+    local_center_hom = np.hstack((local_center, 1))
+    global_center = (T_wp @ local_center_hom)[:3]
     
-    # Use only the first 3 coordinates.
-    points = transformed_corners[:, :3]
+    # The orientation is given by the rotation part of T_wp.
+    R = T_wp[:3, :3]
     
-    # Create an AxisAlignedBoundingBox from these points.
-    aabb = o3d.geometry.AxisAlignedBoundingBox.create_from_points(o3d.utility.Vector3dVector(points))
-    return aabb
-
-
+    # Create and return the oriented bounding box.
+    obb = o3d.geometry.OrientedBoundingBox(global_center, R, extent)
+    return obb
 
 # ----------------------
 # Main
@@ -262,7 +259,7 @@ if __name__ == "__main__":
     # Point cloud.
     point_cloud = None
     try:
-        point_cloud = load_point_cloud("../data/vine_simple.pcd")
+        point_cloud = load_point_cloud("../data/vine_simple_streo_scan.pcd")
         print(f"Loaded point cloud with {len(point_cloud.points)} points.")
         static_geometries.append(point_cloud)
     except Exception as e:
@@ -276,7 +273,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Failed to load point cloud: {e}")
         
-
     # ----------------------
     # Prepare animation objects.
     # ----------------------
@@ -297,7 +293,7 @@ if __name__ == "__main__":
 
     cutter_instances = []      # List of cutter meshes (latest opaque, previous ghosted)
     cutter_bbox_instances = [] # Corresponding bounding boxes
-    opaque_color = [0.0, 0.8, 1.0]
+    opaque_color = [0.0, 1, 0.0]
     ghost_color  = [0.8, 0.8, 0.8]
 
     # ----------------------
@@ -337,14 +333,13 @@ if __name__ == "__main__":
             vis.add_geometry(cutter_instance)
             cutter_instances.append(cutter_instance)
 
-            # Create a corresponding bounding box for this cutter instance.
-            if box_min is not None and box_max is not None:
-                # Here, T is the same transform applied to the cutter.
-                T = pose_to_transformation(current_pos, current_quat)
-                bbox = create_cutter_bbox(box_min, box_max, T)
-                bbox.color = (1, 0, 0)  # e.g., red edges
-                vis.add_geometry(bbox)
-                cutter_bbox_instances.append(bbox)
+            # Create a corresponding oriented bounding box for this cutter instance.
+            # if box_min is not None and box_max is not None:
+                # T = pose_to_transformation(current_pos, current_quat)
+                # obb = create_cutter_obb(box_min, box_max, T)
+                # obb.color = (0, 1, 0)  # Green edges
+                # vis.add_geometry(obb)
+                # cutter_bbox_instances.append(obb)
 
             # Update previously added cutter instances and boxes to ghost color.
             for past_cutter in cutter_instances[:-1]:
@@ -354,10 +349,9 @@ if __name__ == "__main__":
                 past_bbox.color = (0.7, 0.7, 0.7)
                 vis.update_geometry(past_bbox)
 
-
         vis.poll_events()
         vis.update_renderer()
-        time.sleep(0.3)
+        time.sleep(0.1)
 
     vis.run()
     vis.destroy_window()
