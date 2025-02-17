@@ -386,8 +386,11 @@ public:
                 if (nearest_dist < collision_margin) {
                     // std::cout << "[PlannerMpc::meshCollisionCost] Collision detected at: " << query_pt.x << ", "
                     //           << query_pt.y << ", " << query_pt.z << std::endl;
+                    double eps  = 1e-6;
+                    Scalar cost = 1 / (2 * collision_margin) * (nearest_dist - collision_margin)
+                                  * (nearest_dist - collision_margin);
                     Scalar diff = (Scalar(1.0) / nearest_dist) - (Scalar(1.0) / collision_margin);
-                    total_cost += Scalar(0.5) * w_obs * diff * diff;
+                    total_cost += w_obs * cost;
                 }
             }
         }

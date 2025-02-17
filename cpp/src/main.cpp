@@ -45,7 +45,7 @@ int main() {
     planner.w_p_term             = 1e3;   // Terminal positional cost weight.
     planner.w_q_term             = 1e3;   // Terminal orientation cost weight.
     planner.w_obs                = 1e4;   // Obstacle avoidance cost weight.
-    planner.collision_margin     = 0.015;
+    planner.collision_margin     = 0.02;
     planner.w_visibility         = 15.0;
     planner.alpha_visibility     = 15.0;
     planner.d_thresh             = 0.025;
@@ -112,7 +112,9 @@ int main() {
     Eigen::AngleAxisd Ry0(p1, Eigen::Vector3d::UnitY());
     Eigen::AngleAxisd Rx0(r1, Eigen::Vector3d::UnitX());
     H_0.linear() = (Rz0 * Ry0 * Rx0).matrix();
-    planner.H_0  = H_0;
+    H_0.linear() << 0.9907284963734801, 0.01923310699281764, -0.13441684452520866, 0.1337577243239575,
+        0.032219489672272936, 0.9904804604618397, 0.02338085880431727, -0.9992957480549294, 0.029348189933893397;
+    H_0.translation() << 0.243274508481936, 0.44056617285391136, 0.6743629428023914;
 
     // 9) Define goals
     std::vector<Eigen::Isometry3d> goals;
@@ -148,10 +150,10 @@ int main() {
         Eigen::Isometry3d H_goal_2;
         H_goal_2.linear() << 0.7143149855728739, 0.6505352486054033, -0.2579668320649915, 0.2374895719947491,
             0.12140501343054791, 0.9637637452113067, 0.6582807542993981, -0.7497097525281597, -0.06777391734167852;
-        H_goal_2.translation() << 0.33265150045528724, 0.4465883461369802, 0.7510606089369389;
+        H_goal_2.translation() << 0.33265150045528724, 0.4465883461369802, 0.7110606089369389;
 
 
-        goals.emplace_back(H_goal_1);
+        // goals.emplace_back(H_goal_1);
         goals.emplace_back(H_goal_2);
     }
 
