@@ -265,13 +265,13 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Failed to load point cloud: {e}")
         
-    try:
-        point_cloud = load_point_cloud("collision_debug.pcd")
-        print(f"Loaded point cloud with {len(point_cloud.points)} points.")
-        point_cloud.paint_uniform_color([1, 0, 0]) 
-        static_geometries.append(point_cloud)
-    except Exception as e:
-        print(f"Failed to load point cloud: {e}")
+    # try:
+    #     point_cloud = load_point_cloud("collision_debug.pcd")
+    #     print(f"Loaded point cloud with {len(point_cloud.points)} points.")
+    #     point_cloud.paint_uniform_color([1, 0, 0]) 
+    #     static_geometries.append(point_cloud)
+    # except Exception as e:
+    #     print(f"Failed to load point cloud: {e}")
         
     # ----------------------
     # Prepare animation objects.
@@ -351,7 +351,7 @@ if __name__ == "__main__":
 
         vis.poll_events()
         vis.update_renderer()
-        time.sleep(0.1)
+        time.sleep(0.2)
 
     vis.run()
     vis.destroy_window()

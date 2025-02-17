@@ -46,7 +46,7 @@ int main() {
     planner.w_q_term             = 1e3;   // Terminal orientation cost weight.
     planner.w_obs                = 1e4;   // Obstacle avoidance cost weight.
     planner.collision_margin     = 0.015;
-    planner.w_visibility         = 0;  // 15.0;
+    planner.w_visibility         = 15.0;
     planner.alpha_visibility     = 15.0;
     planner.d_thresh             = 0.025;
     planner.visibility_fov       = 60.0;  // Field of view in degrees.
@@ -106,7 +106,7 @@ int main() {
 
     // 8) Set the initial pose
     Eigen::Isometry3d H_0 = Eigen::Isometry3d::Identity();
-    H_0.translation()     = Eigen::Vector3d(0.3, 0.3, 0.725);
+    H_0.translation()     = Eigen::Vector3d(0.2, 0.3, 0.725);
     double r1 = -M_PI_2, p1 = 0, yaw1 = 0;
     Eigen::AngleAxisd Rz0(yaw1, Eigen::Vector3d::UnitZ());
     Eigen::AngleAxisd Ry0(p1, Eigen::Vector3d::UnitY());
@@ -148,7 +148,7 @@ int main() {
         Eigen::Isometry3d H_goal_2;
         H_goal_2.linear() << 0.7143149855728739, 0.6505352486054033, -0.2579668320649915, 0.2374895719947491,
             0.12140501343054791, 0.9637637452113067, 0.6582807542993981, -0.7497097525281597, -0.06777391734167852;
-        H_goal_2.translation() << 0.33265150045528724, 0.4465883461369802, 0.7110606089369389;
+        H_goal_2.translation() << 0.33265150045528724, 0.4465883461369802, 0.7510606089369389;
 
 
         goals.emplace_back(H_goal_1);
