@@ -14,7 +14,7 @@
 int main() {
     const size_t StateDim   = 6;
     const size_t ActionDim  = 6;
-    const size_t HorizonDim = 3;
+    const size_t HorizonDim = 6;
     PlannerMpc<StateDim, ActionDim, HorizonDim, double> planner;
 
     // 1) Load original cloud
@@ -40,23 +40,29 @@ int main() {
     planner.kd_tree        = kd_tree;
 
     // 5) Set weights, collision, and visibility settings
-    planner.w_p                  = 1e3;   // Positional tracking cost weight.
-    planner.w_q                  = 10.0;  // Orientation tracking cost weight.
-    planner.w_p_term             = 1e3;   // Terminal positional cost weight.
-    planner.w_q_term             = 1e3;   // Terminal orientation cost weight.
-    planner.w_obs                = 1e4;   // Obstacle avoidance cost weight.
-    planner.collision_margin     = 0.02;
-    planner.w_visibility         = 15.0;
-    planner.alpha_visibility     = 15.0;
+    planner.w_p                  = 1e3;  // Positional tracking cost weight.
+    planner.w_q                  = 1e2;  // Orientation tracking cost weight.
+    planner.w_p_term             = 1e4;  // Terminal positional cost weight.
+    planner.w_q_term             = 1e2;  // Terminal orientation cost weight.
+    planner.w_obs                = 1e3;  // Obstacle avoidance cost weight.
+    planner.collision_margin     = 0.03;
+    planner.w_visibility         = 200.0;
+    planner.alpha_visibility     = 10.0;
     planner.d_thresh             = 0.025;
     planner.visibility_fov       = 60.0;  // Field of view in degrees.
-    planner.visibility_min_range = 0.0;
+    planner.visibility_min_range = 0.01;
     planner.visibility_max_range = 0.5;
-    planner.max_iterations       = 10;
+    planner.max_iterations       = 20;
+
+    // MPPI parameters
+    planner.num_samples   = 500;           // Number of candidate trajectories to sample.
+    planner.mppi_lambda   = double(1.0);   // Temperature parameter.
+    planner.noise_std_pos = double(0.01);  // Standard deviation for position noise.
+    planner.noise_std_ori = double(0.05);  // Standard deviation for orientation noise.
 
     // 6) Set control bounds
-    planner.dp_max     = 0.05;
-    planner.dp_min     = -0.05;
+    planner.dp_max     = 0.02;
+    planner.dp_min     = -0.02;
     planner.dtheta_max = 0.15;
     planner.dtheta_min = -0.15;
 
@@ -106,7 +112,7 @@ int main() {
 
     // 8) Set the initial pose
     Eigen::Isometry3d H_0 = Eigen::Isometry3d::Identity();
-    H_0.translation()     = Eigen::Vector3d(0.2, 0.3, 0.725);
+    H_0.translation()     = Eigen::Vector3d(0.0, 0.3, 0.725);
     double r1 = -M_PI_2, p1 = 0, yaw1 = 0;
     Eigen::AngleAxisd Rz0(yaw1, Eigen::Vector3d::UnitZ());
     Eigen::AngleAxisd Ry0(p1, Eigen::Vector3d::UnitY());
@@ -153,7 +159,7 @@ int main() {
         H_goal_2.translation() << 0.33265150045528724, 0.4465883461369802, 0.7110606089369389;
 
 
-        // goals.emplace_back(H_goal_1);
+        goals.emplace_back(H_goal_1);
         goals.emplace_back(H_goal_2);
     }
 

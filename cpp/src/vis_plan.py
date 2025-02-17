@@ -335,11 +335,11 @@ if __name__ == "__main__":
 
             # Create a corresponding oriented bounding box for this cutter instance.
             # if box_min is not None and box_max is not None:
-                # T = pose_to_transformation(current_pos, current_quat)
-                # obb = create_cutter_obb(box_min, box_max, T)
-                # obb.color = (0, 1, 0)  # Green edges
-                # vis.add_geometry(obb)
-                # cutter_bbox_instances.append(obb)
+            #     T = pose_to_transformation(current_pos, current_quat)
+            #     obb = create_cutter_obb(box_min, box_max, T)
+            #     obb.color = (0, 1, 0)  # Green edges
+            #     vis.add_geometry(obb)
+            #     cutter_bbox_instances.append(obb)
 
             # Update previously added cutter instances and boxes to ghost color.
             for past_cutter in cutter_instances[:-1]:
@@ -351,7 +351,7 @@ if __name__ == "__main__":
 
         vis.poll_events()
         vis.update_renderer()
-        time.sleep(0.2)
+        time.sleep(0.01)
 
     vis.run()
     vis.destroy_window()

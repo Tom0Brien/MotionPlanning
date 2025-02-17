@@ -16,6 +16,7 @@
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include <random>  // Added for MPPI noise sampling
 #include <vector>
 
 /**
@@ -228,8 +229,10 @@ public:
 
     /// Obstacle avoidance cost weight.
     Scalar w_obs = Scalar(5.0);
-    /// Obstacle cloud for avoidance and visibility.
+    /// Obstacle cloud for avoidance
     pcl::PointCloud<pcl::PointXYZ>::ConstPtr obstacle_cloud;
+    /// Visibility cloud for visibility.
+    pcl::PointCloud<pcl::PointXYZ>::ConstPtr visibility_cloud;
     /// End-effector mesh cloud for collision checking.
     pcl::PointCloud<pcl::PointXYZ>::Ptr ee_mesh_cloud =
         pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>());
@@ -248,6 +251,12 @@ public:
     /// Control bounds for orientation.
     Scalar dtheta_min = Scalar(-0.1);
     Scalar dtheta_max = Scalar(0.1);
+
+    int num_samples      = 2048;          // Number of candidate trajectories to sample.
+    Scalar mppi_lambda   = Scalar(1.0);   // Temperature parameter.
+    Scalar noise_std_pos = Scalar(0.01);  // Standard deviation for position noise.
+    Scalar noise_std_ori = Scalar(0.05);  // Standard deviation for orientation noise.
+    // ********************************
 
     /// Maintained control sequence for warm-starting (size: ActionDim * HorizonDim).
     std::vector<Scalar> U;
@@ -384,8 +393,9 @@ public:
                 // std::cout << "[PlannerMpc::meshCollisionCost] Nearest dist: " << nearest_dist << std::endl;
                 // If the point is within the collision margin, accumulate a penalty.
                 if (nearest_dist < collision_margin) {
-                    // std::cout << "[PlannerMpc::meshCollisionCost] Collision detected at: " << query_pt.x << ", "
-                    //           << query_pt.y << ", " << query_pt.z << std::endl;
+                    // std::cout << "[PlannerMpc::meshCollisionCost] Collision detected at: " << query_pt.x
+                    //           << ", "
+                    //               << query_pt.y << ", " << query_pt.z << std::endl;
                     double eps  = 1e-6;
                     Scalar cost = 1 / (2 * collision_margin) * (nearest_dist - collision_margin)
                                   * (nearest_dist - collision_margin);
@@ -414,11 +424,12 @@ public:
         // collision_threshold: number of points below which the penalty is minimal.
         // collision_alpha: controls the steepness of the penalty increase.
         const Scalar collision_threshold = Scalar(1);
-        const Scalar collision_alpha     = Scalar(1.0);
+        const Scalar collision_alpha     = Scalar(10.0);
 
         // Softplus penalty: cost = w_obs * log(1 + exp(collision_alpha*(n_points - collision_threshold)))
         // This function is smooth and its gradient increases as more points appear in the box.
-        Scalar cost = w_obs * std::log(Scalar(1) + std::exp(collision_alpha * (n_points - collision_threshold)));
+        // Scalar cost = w_obs * std::log(Scalar(1) + std::exp(collision_alpha * (n_points - collision_threshold)));
+        Scalar cost = w_obs * n_points;
         return cost;
     }
 
@@ -483,9 +494,9 @@ public:
             // double box_cost = boxCollisionCost(eulerZYXToIsometry<Scalar>(p, eul));
             // std::cout << "[PlannerMpc::cost] Box collision cost: " << box_cost << std::endl;
             // Add detailed mesh collision cost.
-            // total_cost += meshCollisionCost(H);
-            cost += poseCost(p, eul, w_p, w_q) + meshCollisionCost(eulerZYXToIsometry<Scalar>(p, eul))
-                    + visibilityCost(p, eul);
+            // cost += boxCollisionCost(eulerZYXToIsometry<Scalar>(p, eul));
+            cost += meshCollisionCost(eulerZYXToIsometry<Scalar>(p, eul));
+            cost += poseCost(p, eul, w_p, w_q) + visibilityCost(p, eul);
         }
         // Terminal cost
         auto p_N   = traj[HorizonDim].template head<3>();
@@ -525,6 +536,7 @@ public:
 
         int dim = ActionDim * HorizonDim;
         // nlopt::opt localOpt(nlopt::LN_COBYLA, dim);
+        // nlopt::opt opt(nlopt::GN_DIRECT_L, dim);
         nlopt::opt opt(nlopt::LN_COBYLA, dim);
         // nlopt::opt opt(nlopt::GN_ISRES, dim);
         // opt.set_local_optimizer(localOpt);
@@ -579,6 +591,99 @@ public:
             std::fill(U.begin(), U.end(), Scalar(0));
         }
 
+        return U_opt;
+    }
+
+    std::vector<Scalar> getActionMPPI(const IsometryT& H0_in) {
+        H_0 = H0_in;
+        if (HorizonDim <= 0) {
+            std::cerr << "[PlannerMpc::getAction] HorizonDim <= 0.\n";
+            return {};
+        }
+        if (static_cast<int>(U.size()) != ActionDim * HorizonDim)
+            U.assign(ActionDim * HorizonDim, Scalar(0));
+
+        int dim = ActionDim * HorizonDim;
+
+        // MPPI parameters (using member variables):
+        int N         = num_samples;
+        Scalar lambda = mppi_lambda;
+
+        // Set up noise standard deviations per control dimension.
+        // (For the simple integrator, assume first 3 entries are position and the next 3 are orientation.)
+        std::vector<Scalar> noise_std(ActionDim);
+        for (int i = 0; i < 3; ++i)
+            noise_std[i] = noise_std_pos;
+        for (int i = 3; i < ActionDim; ++i)
+            noise_std[i] = noise_std_ori;
+
+        // Prepare containers for candidates and costs.
+        std::vector<std::vector<Scalar>> candidates(N, std::vector<Scalar>(dim, 0));
+        std::vector<Scalar> candidate_costs(N, 0);
+
+// Parallelize the candidate sampling and evaluation.
+#pragma omp parallel for
+        for (int i = 0; i < N; ++i) {
+            // Each thread creates its own random number generator.
+            std::random_device rd;
+            std::mt19937 gen(rd() + i);
+            // For each candidate, sample a control sequence.
+            for (int k = 0; k < HorizonDim; ++k) {
+                for (int j = 0; j < ActionDim; ++j) {
+                    int idx      = k * ActionDim + j;
+                    Scalar noise = 0;
+                    // Create local normal distribution based on control type.
+                    if (j < 3) {  // Position noise.
+                        std::normal_distribution<Scalar> dist(0.0, noise_std_pos);
+                        noise = dist(gen) * std::exp(-Scalar(k));
+                    }
+                    else {  // Orientation noise.
+                        std::normal_distribution<Scalar> dist(0.0, noise_std_ori);
+                        noise = dist(gen) * std::exp(-Scalar(k));
+                    }
+                    candidates[i][idx] = U[idx] + noise;
+                    // Clip the candidate values to respect control bounds.
+                    if (j < 3)  // position bounds
+                        candidates[i][idx] = std::max(dp_min, std::min(dp_max, candidates[i][idx]));
+                    else  // orientation bounds
+                        candidates[i][idx] = std::max(dtheta_min, std::min(dtheta_max, candidates[i][idx]));
+                }
+            }
+            std::vector<Scalar> grad;  // Unused here.
+            candidate_costs[i] = cost(candidates[i], grad);
+        }
+
+        // Compute weights based on cost.
+        Scalar min_cost = *std::min_element(candidate_costs.begin(), candidate_costs.end());
+        std::vector<Scalar> weights(N, 0);
+        Scalar weight_sum = 0;
+        for (int i = 0; i < N; ++i) {
+            weights[i] = std::exp(-(candidate_costs[i] - min_cost) / lambda);
+            weight_sum += weights[i];
+        }
+        for (int i = 0; i < N; ++i)
+            weights[i] /= weight_sum;
+
+        // Update the control sequence by taking the weighted average.
+        std::vector<Scalar> U_opt(dim, 0);
+        for (int i = 0; i < N; ++i) {
+            for (int j = 0; j < dim; ++j) {
+                U_opt[j] += weights[i] * candidates[i][j];
+            }
+        }
+
+        // Recede the horizon: shift the control sequence one step ahead.
+        if (HorizonDim > 1) {
+            for (int k = 0; k < HorizonDim - 1; ++k)
+                for (int j = 0; j < ActionDim; ++j)
+                    U[k * ActionDim + j] = U_opt[(k + 1) * ActionDim + j];
+            // Initialize the last time step with zeros.
+            for (int j = 0; j < ActionDim; ++j)
+                U[(HorizonDim - 1) * ActionDim + j] = 0;
+        }
+        else {
+            U = U_opt;
+        }
         return U_opt;
     }
 
