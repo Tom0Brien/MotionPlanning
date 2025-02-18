@@ -268,6 +268,9 @@ public:
     /// Maximum number of iterations for waypoint generation.
     int max_iterations = 20;
 
+    double fusion_position_tolerance    = 1e-2;
+    double fusion_orientation_tolerance = 0.1;
+
     pcl::PointCloud<pcl::PointXYZ>::Ptr collision_debug_cloud =
         pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>());
 
@@ -688,6 +691,46 @@ public:
     }
 
     /**
+     * @brief Post-process the generated waypoints and fuse consecutive waypoints that are close together.
+     *
+     * Two poses are considered “close” if both their translational difference (Euclidean norm)
+     * and rotational difference (norm of the 3-vector from homogeneousError) are below the provided tolerances.
+     * In this simple implementation, if two consecutive poses are within tolerance,
+     * the translation is averaged and the rotation of the first pose is retained.
+     *
+     * @param waypoints The input vector of waypoints.
+     * @param pos_tol Positional tolerance for fusion.
+     * @param ori_tol Orientation tolerance for fusion.
+     * @return A vector of fused waypoints.
+     */
+    std::vector<IsometryT> fuseWaypoints(const std::vector<IsometryT>& waypoints) {
+        std::vector<IsometryT> fused;
+        if (waypoints.empty())
+            return fused;
+
+        fused.push_back(waypoints.front());
+        for (size_t i = 1; i < waypoints.size() - 1; ++i) {
+            // Compute the error between the last fused pose and the current one.
+            Eigen::Matrix<Scalar, 6, 1> diff = homogeneousError(fused.back(), waypoints[i]);
+            Scalar pos_diff                  = diff.head(3).norm();
+            Scalar ori_diff                  = diff.tail(3).norm();
+
+            if (pos_diff < fusion_position_tolerance && ori_diff < fusion_orientation_tolerance) {
+                // If the poses are close, update the last fused waypoint by averaging the translation.
+                fused.back().translation() = (fused.back().translation() + waypoints[i].translation()) / Scalar(2);
+                std::cout << "[PlannerMpc::fuseWaypoints] Fused waypoints at index " << i << std::endl;
+                // For rotation: if the difference is very small, simply keep the existing rotation.
+            }
+            else {
+                fused.push_back(waypoints[i]);
+            }
+        }
+        // Always keep the last waypoint.
+        fused.push_back(waypoints.back());
+        return fused;
+    }
+
+    /**
      * @brief Generates waypoints by running the MPC loop from the initial pose to
      * the goal pose, while also computing time statistics and visibility metrics.
      *
@@ -709,7 +752,7 @@ public:
         std::vector<IsometryT> waypoints{H_0};
         int iter = 0;
         for (iter = 0; iter < max_iterations; ++iter) {
-            auto U_opt                      = getAction(H_0);
+            auto U_opt                      = getActionMPPI(H_0);
             auto states                     = rollout(U_opt);
             auto next_s                     = states[1];  // receding-horizon step
             Eigen::Matrix<Scalar, 3, 1> p   = next_s.head(3);
@@ -761,6 +804,8 @@ public:
                   << "Number of waypoints: " << waypoints.size() << std::endl;
         std::cout << "[PlannerMpc::generateWaypoints] "
                   << "Average visible points per waypoint: " << avg_visible_per_waypoint << std::endl;
+        // Fuse waypoints that are close together.
+        waypoints = fuseWaypoints(waypoints);
 
         return waypoints;
     }

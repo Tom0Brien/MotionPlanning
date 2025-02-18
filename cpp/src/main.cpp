@@ -60,9 +60,13 @@ int main() {
     planner.noise_std_pos = double(0.01);  // Standard deviation for position noise.
     planner.noise_std_ori = double(0.05);  // Standard deviation for orientation noise.
 
+    // Fusion parameters
+    planner.fusion_position_tolerance    = 1e-2;
+    planner.fusion_orientation_tolerance = 0.2;
+
     // 6) Set control bounds
-    planner.dp_max     = 0.02;
-    planner.dp_min     = -0.02;
+    planner.dp_max     = 0.05;
+    planner.dp_min     = -0.05;
     planner.dtheta_max = 0.15;
     planner.dtheta_min = -0.15;
 
@@ -112,15 +116,15 @@ int main() {
 
     // 8) Set the initial pose
     Eigen::Isometry3d H_0 = Eigen::Isometry3d::Identity();
-    H_0.translation()     = Eigen::Vector3d(0.0, 0.3, 0.725);
+    H_0.translation()     = Eigen::Vector3d(0.0, 0.2, 0.725);
     double r1 = -M_PI_2, p1 = 0, yaw1 = 0;
     Eigen::AngleAxisd Rz0(yaw1, Eigen::Vector3d::UnitZ());
     Eigen::AngleAxisd Ry0(p1, Eigen::Vector3d::UnitY());
     Eigen::AngleAxisd Rx0(r1, Eigen::Vector3d::UnitX());
     H_0.linear() = (Rz0 * Ry0 * Rx0).matrix();
-    H_0.linear() << 0.9907284963734801, 0.01923310699281764, -0.13441684452520866, 0.1337577243239575,
-        0.032219489672272936, 0.9904804604618397, 0.02338085880431727, -0.9992957480549294, 0.029348189933893397;
-    H_0.translation() << 0.243274508481936, 0.44056617285391136, 0.6743629428023914;
+    // H_0.linear() << 0.9907284963734801, 0.01923310699281764, -0.13441684452520866, 0.1337577243239575,
+    //     0.032219489672272936, 0.9904804604618397, 0.02338085880431727, -0.9992957480549294, 0.029348189933893397;
+    // H_0.translation() << 0.243274508481936, 0.44056617285391136, 0.6743629428023914;
 
     // 9) Define goals
     std::vector<Eigen::Isometry3d> goals;

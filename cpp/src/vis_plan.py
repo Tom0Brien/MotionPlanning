@@ -351,7 +351,7 @@ if __name__ == "__main__":
 
         vis.poll_events()
         vis.update_renderer()
-        time.sleep(0.01)
+        time.sleep(0.05)
 
     vis.run()
     vis.destroy_window()
