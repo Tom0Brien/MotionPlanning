@@ -12,6 +12,7 @@
 #include <pcl/conversions.h>  // For converting polygon meshes to point clouds
 #include <pcl/filters/crop_box.h>
 #include <pcl/filters/frustum_culling.h>
+#include <pcl/filters/voxel_grid.h>
 #include <pcl/io/vtk_lib_io.h>  // For loading STL files
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/point_cloud.h>
@@ -88,11 +89,11 @@ Eigen::Matrix<Scalar, 6, 1> homogeneousError(const Eigen::Transform<Scalar, 3, E
  * @return The number of points in the cloud that lie within the camera frustum.
  */
 template <typename Scalar>
-std::size_t getVisibleCount(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& cloud,
-                            Scalar fov_degs,
-                            Scalar near_plane,
-                            Scalar far_plane,
-                            const Eigen::Transform<Scalar, 3, Eigen::Isometry>& pose) {
+pcl::PointCloud<pcl::PointXYZ>::Ptr getFrustrumCloud(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& cloud,
+                                                     Scalar fov_degs,
+                                                     Scalar near_plane,
+                                                     Scalar far_plane,
+                                                     const Eigen::Transform<Scalar, 3, Eigen::Isometry>& pose) {
     if (!cloud || cloud->points.empty()) {
         return 0;
     }
@@ -119,7 +120,7 @@ std::size_t getVisibleCount(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& clou
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_out(new pcl::PointCloud<pcl::PointXYZ>());
     fc.filter(*cloud_out);
 
-    return cloud_out->size();
+    return cloud_out;
 }
 
 // Helper function to extract the points that lie inside the collision box.
@@ -469,14 +470,19 @@ public:
 
         auto H = eulerZYXToIsometry<Scalar>(p, eul);
         std::size_t visible =
-            getVisibleCount(obstacle_cloud, visibility_fov, visibility_min_range, visibility_max_range, H);
+            getFrustrumCloud(obstacle_cloud, visibility_fov, visibility_min_range, visibility_max_range, H)->size();
         Scalar ratio = static_cast<Scalar>(visible) / static_cast<Scalar>(obstacle_cloud->points.size());
 
-        // Reduce importance of this term if near the goal
-        Scalar dist  = (p - H_goal.translation()).norm();
-        Scalar scale = std::min(Scalar(1), dist / d_thresh);
+        // Compute distance to the goal.
+        Scalar dist = (p - H_goal.translation()).norm();
 
-        // Exponential reward => cost is high if ratio is low
+        // Use a sigmoid function to smoothly transition the scaling:
+        // When dist is much smaller than d_thresh, scale ~ 0,
+        // when dist is much larger than d_thresh, scale ~ 1.
+        // gamma_visibility determines the steepness of this transition.
+        Scalar scale = Scalar(1) / (Scalar(1) + std::exp(-1 * (dist - d_thresh)));
+
+        // Exponential reward: cost is high if the visibility ratio is low.
         return w_visibility * std::exp(-alpha_visibility * ratio) * scale;
     }
 
@@ -717,7 +723,7 @@ public:
 
             if (pos_diff < fusion_position_tolerance && ori_diff < fusion_orientation_tolerance) {
                 // If the poses are close, update the last fused waypoint by averaging the translation.
-                fused.back().translation() = (fused.back().translation() + waypoints[i].translation()) / Scalar(2);
+                // fused.back().translation() = (fused.back().translation() + waypoints[i].translation()) / Scalar(2);
                 std::cout << "[PlannerMpc::fuseWaypoints] Fused waypoints at index " << i << std::endl;
                 // For rotation: if the difference is very small, simply keep the existing rotation.
             }
@@ -791,7 +797,8 @@ public:
         if (obstacle_cloud && !obstacle_cloud->points.empty()) {
             for (const auto& wp : waypoints) {
                 std::size_t visible_count =
-                    getVisibleCount(obstacle_cloud, visibility_fov, visibility_min_range, visibility_max_range, wp);
+                    getFrustrumCloud(obstacle_cloud, visibility_fov, visibility_min_range, visibility_max_range, wp)
+                        ->size();
                 sum_visible += static_cast<double>(visible_count);
             }
         }
@@ -854,7 +861,7 @@ public:
 
         // --- Apply scaling and re-centering ---
         // For example, set the desired scale factor:
-        float cutter_scale = 0.001f;
+        float cutter_scale = 1.0f;
         // Compute the centroid of the cloud.
         Eigen::Vector4f centroid(0, 0, 0, 0);
         for (const auto& pt : cloud.points) {
@@ -937,7 +944,7 @@ public:
 
         // Optional: apply scaling/re-centering if needed.
         // For example, set the desired scale factor:
-        float cutter_scale = 0.001f;
+        float cutter_scale = 1.0f;
         // Compute the centroid of the cloud.
         Eigen::Vector4f centroid(0, 0, 0, 0);
         for (const auto& pt : cloud->points) {
@@ -954,7 +961,7 @@ public:
         // Downsample the point cloud using a VoxelGrid filter.
         pcl::VoxelGrid<pcl::PointXYZ> voxel_filter;
         voxel_filter.setInputCloud(cloud);
-        float leaf_size = 0.01f;  // Adjust the voxel (leaf) size as needed.
+        float leaf_size = 0.02f;  // Adjust the voxel (leaf) size as needed.
         voxel_filter.setLeafSize(leaf_size, leaf_size, leaf_size);
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZ>());
         voxel_filter.filter(*cloud_downsampled);

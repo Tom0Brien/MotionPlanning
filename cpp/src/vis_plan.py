@@ -284,7 +284,7 @@ if __name__ == "__main__":
     try:
         cutter_mesh = o3d.io.read_triangle_mesh("../data/cutter.stl")
         cutter_mesh.compute_vertex_normals()
-        cutter_scale = 0.001
+        cutter_scale = 1
         cutter_mesh.scale(cutter_scale, center=cutter_mesh.get_center())
         cutter_mesh.translate(-cutter_mesh.get_center())
     except Exception as e:
@@ -351,7 +351,7 @@ if __name__ == "__main__":
 
         vis.poll_events()
         vis.update_renderer()
-        time.sleep(0.05)
+        time.sleep(0.2)
 
     vis.run()
     vis.destroy_window()

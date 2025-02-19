@@ -68,6 +68,7 @@
     "stop_token": "cpp",
     "typeindex": "cpp",
     "variant": "cpp",
-    "__nullptr": "cpp"
+    "__nullptr": "cpp",
+    "random": "cpp"
   }
 }

@@ -28,7 +28,7 @@ int main() {
     pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::VoxelGrid<pcl::PointXYZ> voxel;
     voxel.setInputCloud(originalCloud);
-    voxel.setLeafSize(0.03f, 0.03f, 0.03f);
+    voxel.setLeafSize(0.02f, 0.02f, 0.02f);
     voxel.filter(*downsampled_cloud);
 
     // 3) Build KD-tree
@@ -45,43 +45,43 @@ int main() {
     planner.w_p_term             = 1e4;  // Terminal positional cost weight.
     planner.w_q_term             = 1e2;  // Terminal orientation cost weight.
     planner.w_obs                = 1e3;  // Obstacle avoidance cost weight.
-    planner.collision_margin     = 0.03;
+    planner.collision_margin     = 0.05;
     planner.w_visibility         = 200.0;
-    planner.alpha_visibility     = 10.0;
-    planner.d_thresh             = 0.025;
+    planner.alpha_visibility     = 20.0;
+    planner.d_thresh             = 0.05;
     planner.visibility_fov       = 60.0;  // Field of view in degrees.
     planner.visibility_min_range = 0.01;
     planner.visibility_max_range = 0.5;
     planner.max_iterations       = 20;
 
     // MPPI parameters
-    planner.num_samples   = 500;           // Number of candidate trajectories to sample.
+    planner.num_samples   = 200;           // Number of candidate trajectories to sample.
     planner.mppi_lambda   = double(1.0);   // Temperature parameter.
     planner.noise_std_pos = double(0.01);  // Standard deviation for position noise.
     planner.noise_std_ori = double(0.05);  // Standard deviation for orientation noise.
 
     // Fusion parameters
-    planner.fusion_position_tolerance    = 1e-2;
-    planner.fusion_orientation_tolerance = 0.2;
+    planner.fusion_position_tolerance    = 0.02;
+    planner.fusion_orientation_tolerance = 0.1;
 
     // 6) Set control bounds
-    planner.dp_max     = 0.05;
-    planner.dp_min     = -0.05;
-    planner.dtheta_max = 0.15;
-    planner.dtheta_min = -0.15;
+    planner.dp_max     = 0.025;
+    planner.dp_min     = -0.025;
+    planner.dtheta_max = 0.1;
+    planner.dtheta_min = -0.1;
 
     // 7) Update the collision box from the STL model of the end effector.
     // Here we load the STL file from "../data/cutter.stl" and apply a rigid transform to it to position it correctly in
     // the camera frame. Modify cutter_transform if a different pose is desired.
     Eigen::Isometry3d cutter_transform = Eigen::Isometry3d::Identity();
-    cutter_transform.translation()     = Eigen::Vector3d(0.0, 0.075, 0.03);
+    cutter_transform.translation()     = Eigen::Vector3d(0.0, 0.08, 0.03);
     Eigen::AngleAxisd Rzc(M_PI_2, Eigen::Vector3d::UnitZ());
     Eigen::AngleAxisd Ryc(0, Eigen::Vector3d::UnitY());
     Eigen::AngleAxisd Rxc(M_PI_2, Eigen::Vector3d::UnitX());
     cutter_transform.linear() = (Rzc * Ryc * Rxc).matrix();
     double collision_margin   = 0.005;
-    planner.updateEndEffectorBoxFromSTL("../data/cutter.stl", cutter_transform, collision_margin);
-    planner.updateEndEffectorMeshFromSTL("../data/cutter.stl", cutter_transform, collision_margin);
+    planner.updateEndEffectorBoxFromSTL("../data/cutter.stl", cutter_transform, planner.collision_margin);
+    planner.updateEndEffectorMeshFromSTL("../data/cutter.stl", cutter_transform, planner.collision_margin);
 
     // Save the box dimensions to a file for later visualization.
     std::ofstream box_file("cutter_box.txt");
@@ -116,15 +116,15 @@ int main() {
 
     // 8) Set the initial pose
     Eigen::Isometry3d H_0 = Eigen::Isometry3d::Identity();
-    H_0.translation()     = Eigen::Vector3d(0.0, 0.2, 0.725);
+    H_0.translation()     = Eigen::Vector3d(0.2, 0.2, 0.725);
     double r1 = -M_PI_2, p1 = 0, yaw1 = 0;
     Eigen::AngleAxisd Rz0(yaw1, Eigen::Vector3d::UnitZ());
     Eigen::AngleAxisd Ry0(p1, Eigen::Vector3d::UnitY());
     Eigen::AngleAxisd Rx0(r1, Eigen::Vector3d::UnitX());
     H_0.linear() = (Rz0 * Ry0 * Rx0).matrix();
-    // H_0.linear() << 0.9907284963734801, 0.01923310699281764, -0.13441684452520866, 0.1337577243239575,
-    //     0.032219489672272936, 0.9904804604618397, 0.02338085880431727, -0.9992957480549294, 0.029348189933893397;
-    // H_0.translation() << 0.243274508481936, 0.44056617285391136, 0.6743629428023914;
+    H_0.linear() << 0.6425468638021853, 0.7591589463428162, -0.10393779340133653, 0.07738188639841208,
+        0.07066251869164698, 0.9944846379633997, 0.7623164161794022, -0.6470583456225703, -0.013341171570557007;
+    H_0.translation() << 0.2930928703755895, 0.4462194264333198, 0.7255900206364525;
 
     // 9) Define goals
     std::vector<Eigen::Isometry3d> goals;
@@ -155,16 +155,15 @@ int main() {
         Eigen::Isometry3d H_goal_1;
         H_goal_1.linear() << 0.9907284963734801, 0.01923310699281764, -0.13441684452520866, 0.1337577243239575,
             0.032219489672272936, 0.9904804604618397, 0.02338085880431727, -0.9992957480549294, 0.029348189933893397;
-        H_goal_1.translation() << 0.243274508481936, 0.44056617285391136, 0.6743629428023914;
+        H_goal_1.translation() << 0.243274508481936, 0.39056617285391136, 0.6743629428023914;
 
         Eigen::Isometry3d H_goal_2;
-        H_goal_2.linear() << 0.7143149855728739, 0.6505352486054033, -0.2579668320649915, 0.2374895719947491,
-            0.12140501343054791, 0.9637637452113067, 0.6582807542993981, -0.7497097525281597, -0.06777391734167852;
-        H_goal_2.translation() << 0.33265150045528724, 0.4465883461369802, 0.7110606089369389;
-
+        H_goal_2.linear() << 0.6425468638021853, 0.7591589463428162, -0.10393779340133653, 0.07738188639841208,
+            0.07066251869164698, 0.9944846379633997, 0.7623164161794022, -0.6470583456225703, -0.013341171570557007;
+        H_goal_2.translation() << 0.2930928703755895, 0.4462194264333198, 0.7255900206364525;
 
         goals.emplace_back(H_goal_1);
-        goals.emplace_back(H_goal_2);
+        // goals.emplace_back(H_goal_2);
     }
 
     // Write goals to "goals.csv"
@@ -194,12 +193,27 @@ int main() {
 
     // Generate waypoints for each goal
     for (size_t i = 0; i < goals.size(); ++i) {
-        planner.H_0    = (i == 0 ? H_0 : all_waypoints[i - 1].back());
+        // For subsequent goals, use the 2nd last waypoint from the previous segment as the initial condition.
+        if (i == 0) {
+            planner.H_0 = H_0;
+        }
+        else {
+            const auto& prev_waypoints = all_waypoints[i - 1];
+            if (prev_waypoints.size() >= 2) {
+                planner.H_0 = prev_waypoints[prev_waypoints.size() - 2];
+            }
+            else {
+                // Fallback to the last waypoint if a 2nd last isn't available.
+                planner.H_0 = prev_waypoints.back();
+            }
+        }
         planner.H_goal = goals[i];
 
         auto start                               = std::chrono::high_resolution_clock::now();
         std::vector<Eigen::Isometry3d> waypoints = planner.generateWaypoints(planner.H_0, planner.H_goal);
-        auto end                                 = std::chrono::high_resolution_clock::now();
+
+        // waypoints.push_back(waypoints[waypoints.size() - 2]);
+        auto end = std::chrono::high_resolution_clock::now();
 
         all_waypoints.push_back(waypoints);
 
@@ -229,11 +243,12 @@ int main() {
         // Loop over all goals' waypoints
         for (const auto& waypoints_for_goal : all_waypoints) {
             for (const auto& wp : waypoints_for_goal) {
-                std::size_t visible_count = getVisibleCount(planner.obstacle_cloud,
-                                                            planner.visibility_fov,
-                                                            planner.visibility_min_range,
-                                                            planner.visibility_max_range,
-                                                            wp);
+                std::size_t visible_count = getFrustrumCloud(planner.obstacle_cloud,
+                                                             planner.visibility_fov,
+                                                             planner.visibility_min_range,
+                                                             planner.visibility_max_range,
+                                                             wp)
+                                                ->size();
                 sum_visible_all += static_cast<double>(visible_count);
                 count_waypoints++;
             }
