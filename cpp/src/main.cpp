@@ -80,8 +80,7 @@ int main() {
     Eigen::AngleAxisd Rxc(M_PI_2, Eigen::Vector3d::UnitX());
     cutter_transform.linear() = (Rzc * Ryc * Rxc).matrix();
     double collision_margin   = 0.005;
-    planner.updateEndEffectorBoxFromSTL("../data/cutter.stl", cutter_transform, planner.collision_margin);
-    planner.updateEndEffectorMeshFromSTL("../data/cutter.stl", cutter_transform, planner.collision_margin);
+    planner.updateEndEffectorFromSTL("../data/cutter.stl", cutter_transform, planner.collision_margin);
 
     // Save the box dimensions to a file for later visualization.
     std::ofstream box_file("cutter_box.txt");
@@ -122,9 +121,9 @@ int main() {
     Eigen::AngleAxisd Ry0(p1, Eigen::Vector3d::UnitY());
     Eigen::AngleAxisd Rx0(r1, Eigen::Vector3d::UnitX());
     H_0.linear() = (Rz0 * Ry0 * Rx0).matrix();
-    H_0.linear() << 0.6425468638021853, 0.7591589463428162, -0.10393779340133653, 0.07738188639841208,
-        0.07066251869164698, 0.9944846379633997, 0.7623164161794022, -0.6470583456225703, -0.013341171570557007;
-    H_0.translation() << 0.2930928703755895, 0.4462194264333198, 0.7255900206364525;
+    // H_0.linear() << 0.6425468638021853, 0.7591589463428162, -0.10393779340133653, 0.07738188639841208,
+    //     0.07066251869164698, 0.9944846379633997, 0.7623164161794022, -0.6470583456225703, -0.013341171570557007;
+    // H_0.translation() << 0.2930928703755895, 0.4462194264333198, 0.7255900206364525;
 
     // 9) Define goals
     std::vector<Eigen::Isometry3d> goals;
@@ -155,7 +154,7 @@ int main() {
         Eigen::Isometry3d H_goal_1;
         H_goal_1.linear() << 0.9907284963734801, 0.01923310699281764, -0.13441684452520866, 0.1337577243239575,
             0.032219489672272936, 0.9904804604618397, 0.02338085880431727, -0.9992957480549294, 0.029348189933893397;
-        H_goal_1.translation() << 0.243274508481936, 0.39056617285391136, 0.6743629428023914;
+        H_goal_1.translation() << 0.243274508481936, 0.44056617285391136, 0.6743629428023914;
 
         Eigen::Isometry3d H_goal_2;
         H_goal_2.linear() << 0.6425468638021853, 0.7591589463428162, -0.10393779340133653, 0.07738188639841208,
