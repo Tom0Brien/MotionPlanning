@@ -53,6 +53,7 @@ int main() {
     planner.visibility_min_range = 0.01;
     planner.visibility_max_range = 0.5;
     planner.max_iterations       = 20;
+    planner.min_visible_points   = 20;
 
     // MPPI parameters
     planner.num_samples   = 200;           // Number of candidate trajectories to sample.
@@ -154,7 +155,7 @@ int main() {
         Eigen::Isometry3d H_goal_1;
         H_goal_1.linear() << 0.9907284963734801, 0.01923310699281764, -0.13441684452520866, 0.1337577243239575,
             0.032219489672272936, 0.9904804604618397, 0.02338085880431727, -0.9992957480549294, 0.029348189933893397;
-        H_goal_1.translation() << 0.243274508481936, 0.44056617285391136, 0.6743629428023914;
+        H_goal_1.translation() << 0.243274508481936, 0.36056617285391136, 0.6743629428023914;
 
         Eigen::Isometry3d H_goal_2;
         H_goal_2.linear() << 0.6425468638021853, 0.7591589463428162, -0.10393779340133653, 0.07738188639841208,

@@ -24,9 +24,7 @@
  * @brief Builds a 4x4 homogeneous transform from a position and ZYX Euler
  * angles.
  *
- * @tparam Scalar The scalar type.
- * @param p The position vector.
- * @param eul The Euler angles (roll, pitch, yaw) in ZYX order.
+ * @tparam Scalar The serror angles (roll, pitch, yaw) in ZYX order.
  * @return An IsometryT representing the homogeneous transform.
  */
 template <typename Scalar>
@@ -227,6 +225,11 @@ public:
     Scalar visibility_max_range = Scalar(0.5);
     /// Distance from goal to begin diminishing visibility cost term
     Scalar d_thresh = Scalar(0.1);
+
+    /// Minimum required points that must be visible
+    double min_visible_ratio = 0.1;  // or whatever integer you'd like
+    int min_visible_points   = 0.0;
+
 
     /// Obstacle avoidance cost weight.
     Scalar w_obs = Scalar(5.0);
@@ -446,23 +449,51 @@ public:
      * @param pose The current pose (as an isometry).
      * @return The computed visibility cost (lower cost for higher visibility).
      */
-    Scalar visibilityCost(const IsometryT& pose) {
-        if (!obstacle_cloud || obstacle_cloud->points.empty())
-            return Scalar(0);
+    // Scalar visibilityCost(const IsometryT& pose) {
+    //     if (!obstacle_cloud || obstacle_cloud->points.empty())
+    //         return Scalar(0);
 
-        // Compute the number of obstacle points visible within the camera frustum.
+    //     // Compute the number of obstacle points visible within the camera frustum.
+    //     std::size_t visible =
+    //         getFrustrumCloud(obstacle_cloud, visibility_fov, visibility_min_range, visibility_max_range,
+    //         pose)->size();
+    //     Scalar ratio = static_cast<Scalar>(visible) / static_cast<Scalar>(obstacle_cloud->points.size());
+
+    //     // Compute the distance to the goal from the translation component.
+    //     Scalar dist = (pose.translation() - H_goal.translation()).norm();
+
+    //     // Use a sigmoid function to smoothly transition the scaling.
+    //     Scalar scale = Scalar(1) / (Scalar(1) + std::exp(-1 * (dist - d_thresh)));
+
+    //     // Exponential reward: cost is high if the visibility ratio is low.
+    //     return w_visibility * std::exp(-alpha_visibility * ratio) * scale;
+    // }
+
+    Scalar visibilityCost(const IsometryT& pose) {
+        // If no visibility cloud is provided, or it's empty,
+        // no visibility constraint can be enforced.
+        if (!obstacle_cloud || obstacle_cloud->points.empty()) {
+            return Scalar(0.0);
+        }
+
+        // Count how many points are in the camera frustum.
         std::size_t visible =
             getFrustrumCloud(obstacle_cloud, visibility_fov, visibility_min_range, visibility_max_range, pose)->size();
-        Scalar ratio = static_cast<Scalar>(visible) / static_cast<Scalar>(obstacle_cloud->points.size());
+        std::cout << "Visible points: " << visible << std::endl;
 
-        // Compute the distance to the goal from the translation component.
-        Scalar dist = (pose.translation() - H_goal.translation()).norm();
+        // Convert to Scalar for safety in math:
+        Scalar v = static_cast<Scalar>(visible);
 
-        // Use a sigmoid function to smoothly transition the scaling.
-        Scalar scale = Scalar(1) / (Scalar(1) + std::exp(-1 * (dist - d_thresh)));
+        // Soft constraint: if v is below min_visible_points, apply an exponential penalty.
+        // The tuning parameter 'alpha' determines how steep the cost grows.
+        Scalar alpha = 0.2;  // Adjust this value as needed.
+        Scalar delta = min_visible_points - v;
+        Scalar cost  = 0.0;
+        if (delta > 0) {
+            cost = std::exp(alpha * delta) - 1.0;
+        }
 
-        // Exponential reward: cost is high if the visibility ratio is low.
-        return w_visibility * std::exp(-alpha_visibility * ratio) * scale;
+        return cost;
     }
 
     /**
@@ -479,11 +510,16 @@ public:
     Scalar cost(const std::vector<Scalar>& x, std::vector<Scalar>& grad) {
         auto traj         = rollout(x);
         Scalar total_cost = 0;
-        for (int k = 0; k <= HorizonDim; ++k) {
+        for (int k = 0; k <= HorizonDim + 1; ++k) {
             // Convert the k-th state (position and Euler angles) into an isometry.
-            IsometryT pose = eulerZYXToIsometry<Scalar>(traj[k].template head<3>(), traj[k].template tail<3>());
-            total_cost += meshCollisionCost(pose);
-            total_cost += poseCost(pose, w_p, w_q) + visibilityCost(pose);
+            IsometryT pose         = eulerZYXToIsometry<Scalar>(traj[k].template head<3>(), traj[k].template tail<3>());
+            double mesh_cost       = meshCollisionCost(pose);
+            double pose_cost       = poseCost(pose, w_p, w_q);
+            double visibility_cost = visibilityCost(pose);
+            std::cout << "Visibility cost: " << visibility_cost << std::endl;
+            std::cout << "Mesh cost: " << mesh_cost << std::endl;
+            std::cout << "Pose cost: " << pose_cost << std::endl;
+            total_cost += pose_cost + mesh_cost + visibility_cost;
         }
         // Terminal cost
         IsometryT pose_N =
@@ -728,6 +764,9 @@ public:
 
         H_0    = init;
         H_goal = goal;
+
+        min_visible_points = static_cast<int>(min_visible_ratio * obstacle_cloud->points.size());
+        std::cout << "[PlannerMpc::generateWaypoints] Minimum visible points: " << min_visible_points << std::endl;
 
         std::vector<IsometryT> waypoints{H_0};
         int iter = 0;
