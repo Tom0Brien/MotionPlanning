@@ -21,15 +21,15 @@
 #include <vector>
 
 /**
- * @brief Builds a 4x4 homogeneous transform from a position and ZYX Euler
+ * @brief Builds a 4x4 homogeneous transform from a position and rpy Euler
  * angles.
  *
- * @tparam Scalar The serror angles (roll, pitch, yaw) in ZYX order.
+ * @tparam Scalar The serror angles (roll, pitch, yaw) in order.
  * @return An IsometryT representing the homogeneous transform.
  */
 template <typename Scalar>
-Eigen::Transform<Scalar, 3, Eigen::Isometry> eulerZYXToIsometry(const Eigen::Matrix<Scalar, 3, 1>& translation,
-                                                                const Eigen::Matrix<Scalar, 3, 1>& eulZYX) {
+Eigen::Transform<Scalar, 3, Eigen::Isometry> stateToIsometry(const Eigen::Matrix<Scalar, 3, 1>& translation,
+                                                             const Eigen::Matrix<Scalar, 3, 1>& eulZYX) {
     Eigen::Transform<Scalar, 3, Eigen::Isometry> T = Eigen::Transform<Scalar, 3, Eigen::Isometry>::Identity();
     T.linear() = Eigen::AngleAxis<Scalar>(eulZYX.z(), Eigen::Matrix<Scalar, 3, 1>::UnitZ())
                  * Eigen::AngleAxis<Scalar>(eulZYX.y(), Eigen::Matrix<Scalar, 3, 1>::UnitY())
@@ -74,6 +74,21 @@ Eigen::Matrix<Scalar, 6, 1> homogeneousError(const Eigen::Transform<Scalar, 3, E
     return e;
 }
 
+template <typename T,
+          typename Scalar                                                                 = typename T::Scalar,
+          std::enable_if_t<((T::RowsAtCompileTime == 3) && (T::ColsAtCompileTime == 3))>* = nullptr>
+inline Eigen::Matrix<Scalar, 3, 1> mat_to_rpy_intrinsic(const T& mat) {
+    // Eigen euler angles and with better range
+    return Eigen::Matrix<Scalar, 3, 1>(
+        // Roll
+        std::atan2(mat(2, 1), mat(2, 2)),
+        // Pitch
+        std::atan2(-mat(2, 0), std::sqrt(mat(2, 1) * mat(2, 1) + mat(2, 2) * mat(2, 2))),
+        // Yaw
+        std::atan2(mat(1, 0), mat(0, 0)));
+}
+
+
 /**
  * @brief Helper function to compute the number of points visible from a given
  * pose under the new coordinate mapping (X forward, Y left, Z up).
@@ -93,7 +108,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr getFrustrumCloud(const pcl::PointCloud<pcl::
                                                      Scalar far_plane,
                                                      const Eigen::Transform<Scalar, 3, Eigen::Isometry>& pose) {
     if (!cloud || cloud->points.empty()) {
-        return 0;
+        return pcl::PointCloud<pcl::PointXYZ>::Ptr();
     }
 
     // Create a FrustumCulling filter
@@ -119,25 +134,6 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr getFrustrumCloud(const pcl::PointCloud<pcl::
     fc.filter(*cloud_out);
 
     return cloud_out;
-}
-
-// Helper function to extract the points that lie inside the collision box.
-template <typename Scalar>
-pcl::PointCloud<pcl::PointXYZ>::Ptr extractPointsInBox(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& cloud,
-                                                       const Eigen::Transform<Scalar, 3, Eigen::Isometry>& pose,
-                                                       const Eigen::Vector4f& box_min,
-                                                       const Eigen::Vector4f& box_max) {
-
-    pcl::CropBox<pcl::PointXYZ> crop_filter;
-    crop_filter.setInputCloud(cloud);
-    // Note: We pass the *inverse* of the pose so that the points are transformed into the box’s frame.
-    crop_filter.setTransform(pose.inverse().template cast<float>());
-    crop_filter.setMin(box_min);
-    crop_filter.setMax(box_max);
-
-    pcl::PointCloud<pcl::PointXYZ>::Ptr in_box(new pcl::PointCloud<pcl::PointXYZ>());
-    crop_filter.filter(*in_box);
-    return in_box;
 }
 
 /**
@@ -213,38 +209,46 @@ public:
     /// Terminal orientation cost weight.
     Scalar w_q_term = Scalar(1e3);
 
-    /// Visibility cost weight.
-    Scalar w_visibility = Scalar(20.0);
+    /// Look at goal cost weight.
+    Scalar w_look_at_goal = Scalar(10.0);
+
     /// Tuning parameter to control the saturation rate.
-    Scalar alpha_visibility = Scalar(20.0);
+    Scalar alpha_visibility = Scalar(0.2);
     /// Field of view (in degrees) for visibility checking.
     Scalar visibility_fov = Scalar(60.0);
     /// Min plane distances for the visibility frustum.
     Scalar visibility_min_range = Scalar(0.0);
     /// Max plane distance for the visibility frustum.
     Scalar visibility_max_range = Scalar(0.5);
-    /// Distance from goal to begin diminishing visibility cost term
-    Scalar d_thresh = Scalar(0.1);
 
-    /// Minimum required points that must be visible
-    double min_visible_ratio = 0.1;  // or whatever integer you'd like
-    int min_visible_points   = 0.0;
+    /// Percentage of points that must be visible.
+    double min_visible_ratio = 0.5;
 
+    /// Minimum number of visible points required.
+    int min_visible_points = 0.0;
+
+    /// Point in world to look at while moving.
+    Eigen::Vector3d look_at_goal = Eigen::Vector3d::Zero();
+
+    /// Look at goal distance from camera.
+    Scalar look_at_goal_distance = Scalar(0.11);
 
     /// Obstacle avoidance cost weight.
     Scalar w_obs = Scalar(5.0);
+
     /// Obstacle cloud for avoidance
     pcl::PointCloud<pcl::PointXYZ>::ConstPtr obstacle_cloud;
-    /// Visibility cloud for visibility.
-    pcl::PointCloud<pcl::PointXYZ>::ConstPtr visibility_cloud;
+
     /// End-effector mesh cloud for collision checking.
     pcl::PointCloud<pcl::PointXYZ>::Ptr ee_mesh_cloud =
         pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>());
 
     /// KD-tree for obstacle queries.
     std::shared_ptr<pcl::KdTreeFLANN<pcl::PointXYZ>> kd_tree;
+
     /// Safety margin for collision avoidance.
     Scalar collision_margin = Scalar(0.05);
+
     // Box dimensions for collision checking (min and max in camera/end-effector frame).
     Eigen::Vector4f box_min = Eigen::Vector4f(-0.08, -0.08, -0.08, 1);
     Eigen::Vector4f box_max = Eigen::Vector4f(0.08, 0.08, 0.08, 1);
@@ -314,15 +318,6 @@ public:
      */
     std::vector<Eigen::Matrix<Scalar, StateDim, 1>> rollout(const std::vector<Scalar>& U_in) {
         std::vector<Eigen::Matrix<Scalar, StateDim, 1>> trajectory(HorizonDim + 1);
-        // Convert H_0 into a state vector: first 3 entries: translation; next 3: Euler angles (from ZYX).
-        Eigen::Matrix<Scalar, StateDim, 1> s0;
-        Eigen::Matrix<Scalar, 3, 1> p0       = H_0.translation();
-        Eigen::Matrix<Scalar, 3, 1> eulerZYX = H_0.rotation().eulerAngles(2, 1, 0);
-        // Reorder to (x,y,z): (eulerZYX(2), eulerZYX(1), eulerZYX(0))
-        Eigen::Matrix<Scalar, 3, 1> eul0;
-        eul0 << eulerZYX(2), eulerZYX(1), eulerZYX(0);
-        s0 << p0, eul0;
-        trajectory[0] = s0;
 
         // Convert U_in into an Eigen matrix (ActionDim x HorizonDim)
         Eigen::Matrix<Scalar, ActionDim, HorizonDim> U_mat;
@@ -331,7 +326,8 @@ public:
                 U_mat(i, k) = U_in[ActionDim * k + i];
             }
         }
-        // For a simple integrator: next state = current state + control.
+        // Simple integrator: next state = current state + control.
+        trajectory[0] << H_0.translation(), mat_to_rpy_intrinsic(H_0.rotation());
         for (int k = 0; k < HorizonDim; ++k) {
             trajectory[k + 1] = trajectory[k] + U_mat.col(k);
         }
@@ -427,51 +423,40 @@ public:
         return cost;
     }
 
-    /**
-     * @brief Computes the pose cost based on the error relative to the goal pose.
-     *
-     * This function computes a homogeneous error between the current pose and H_goal.
-     *
-     * @param pose The current pose as an isometry.
-     * @param wp   The weight for positional error.
-     * @param wq   The weight for orientation error.
-     * @return The computed pose cost.
-     */
     Scalar poseCost(const IsometryT& pose, Scalar wp, Scalar wq) {
-        auto e = homogeneousError(pose, H_goal);
-        return wp * e.head(3).squaredNorm() + wq * e.tail(3).squaredNorm();
+        // 1) Pose cost
+        auto e           = homogeneousError(pose, H_goal);
+        Scalar cost_pose = wp * e.head(3).squaredNorm() + wq * e.tail(3).squaredNorm();
+
+        // 2) Look at goal cost: angle between the camera's +Z axis and (look_at_goal - cameraPos)
+
+        Eigen::Vector3d look_at_goal =
+            H_goal.translation() + H_goal.rotation() * Eigen::Vector3d(0, 0, look_at_goal_distance);
+        Scalar cost_rot                      = Scalar(0);
+        Eigen::Matrix<Scalar, 3, 1> camera_z = pose.linear().col(2);
+        // Typically this is already unit-length if pose is orthonormal.
+
+        // Vector pointing from camera to look_at_goal
+        Eigen::Matrix<Scalar, 3, 1> dir = look_at_goal - pose.translation();
+        Scalar dist                     = dir.norm();
+        if (dist > Scalar(1e-8)) {
+            dir /= dist;  // normalize
+            // Dot product (clamp to [-1,1] for acos)
+            Scalar c = camera_z.dot(dir);
+            if (c > Scalar(1))
+                c = Scalar(1);
+            if (c < Scalar(-1))
+                c = Scalar(-1);
+
+            Scalar angle = std::acos(c);
+            cost_rot     = 10 * wq * angle * angle;
+        }
+
+        return cost_pose + cost_rot;
     }
 
-    /**
-     * @brief Computes a visibility cost based on the fraction of obstacle points
-     *        that lie within the camera frustum of the current pose (X forward, Y left, Z up).
-     *
-     * @param pose The current pose (as an isometry).
-     * @return The computed visibility cost (lower cost for higher visibility).
-     */
-    // Scalar visibilityCost(const IsometryT& pose) {
-    //     if (!obstacle_cloud || obstacle_cloud->points.empty())
-    //         return Scalar(0);
-
-    //     // Compute the number of obstacle points visible within the camera frustum.
-    //     std::size_t visible =
-    //         getFrustrumCloud(obstacle_cloud, visibility_fov, visibility_min_range, visibility_max_range,
-    //         pose)->size();
-    //     Scalar ratio = static_cast<Scalar>(visible) / static_cast<Scalar>(obstacle_cloud->points.size());
-
-    //     // Compute the distance to the goal from the translation component.
-    //     Scalar dist = (pose.translation() - H_goal.translation()).norm();
-
-    //     // Use a sigmoid function to smoothly transition the scaling.
-    //     Scalar scale = Scalar(1) / (Scalar(1) + std::exp(-1 * (dist - d_thresh)));
-
-    //     // Exponential reward: cost is high if the visibility ratio is low.
-    //     return w_visibility * std::exp(-alpha_visibility * ratio) * scale;
-    // }
-
     Scalar visibilityCost(const IsometryT& pose) {
-        // If no visibility cloud is provided, or it's empty,
-        // no visibility constraint can be enforced.
+        // If no visibility cloud is provided, or it's empty, no visibility constraint can be enforced.
         if (!obstacle_cloud || obstacle_cloud->points.empty()) {
             return Scalar(0.0);
         }
@@ -479,21 +464,19 @@ public:
         // Count how many points are in the camera frustum.
         std::size_t visible =
             getFrustrumCloud(obstacle_cloud, visibility_fov, visibility_min_range, visibility_max_range, pose)->size();
-        std::cout << "Visible points: " << visible << std::endl;
 
         // Convert to Scalar for safety in math:
         Scalar v = static_cast<Scalar>(visible);
 
         // Soft constraint: if v is below min_visible_points, apply an exponential penalty.
         // The tuning parameter 'alpha' determines how steep the cost grows.
-        Scalar alpha = 0.2;  // Adjust this value as needed.
         Scalar delta = min_visible_points - v;
-        Scalar cost  = 0.0;
         if (delta > 0) {
-            cost = std::exp(alpha * delta) - 1.0;
+            return 1e3 * std::exp(alpha_visibility * delta) - 1.0;
         }
-
-        return cost;
+        else {
+            return 0.0;
+        }
     }
 
     /**
@@ -501,7 +484,7 @@ public:
      *
      * This function assumes that the trajectory is represented as a vector of state vectors,
      * where each state encodes position and orientation (in Euler angles). Each state is first
-     * converted to an isometry using eulerZYXToIsometry before being passed to the cost functions.
+     * converted to an isometry using stateToIsometry before being passed to the cost functions.
      *
      * @param x    The control sequence.
      * @param grad The gradient of the cost (if required).
@@ -510,20 +493,17 @@ public:
     Scalar cost(const std::vector<Scalar>& x, std::vector<Scalar>& grad) {
         auto traj         = rollout(x);
         Scalar total_cost = 0;
-        for (int k = 0; k <= HorizonDim + 1; ++k) {
+        for (int k = 0; k <= HorizonDim; ++k) {
             // Convert the k-th state (position and Euler angles) into an isometry.
-            IsometryT pose         = eulerZYXToIsometry<Scalar>(traj[k].template head<3>(), traj[k].template tail<3>());
+            IsometryT pose         = stateToIsometry<Scalar>(traj[k].template head<3>(), traj[k].template tail<3>());
             double mesh_cost       = meshCollisionCost(pose);
             double pose_cost       = poseCost(pose, w_p, w_q);
             double visibility_cost = visibilityCost(pose);
-            std::cout << "Visibility cost: " << visibility_cost << std::endl;
-            std::cout << "Mesh cost: " << mesh_cost << std::endl;
-            std::cout << "Pose cost: " << pose_cost << std::endl;
             total_cost += pose_cost + mesh_cost + visibility_cost;
         }
         // Terminal cost
         IsometryT pose_N =
-            eulerZYXToIsometry<Scalar>(traj[HorizonDim].template head<3>(), traj[HorizonDim].template tail<3>());
+            stateToIsometry<Scalar>(traj[HorizonDim].template head<3>(), traj[HorizonDim].template tail<3>());
         total_cost += poseCost(pose_N, w_p_term, w_q_term);
         return total_cost;
     }
@@ -578,7 +558,7 @@ public:
         opt.set_lower_bounds(lb);
         opt.set_upper_bounds(ub);
         opt.set_xtol_rel(1e-6);
-        opt.set_maxeval(100);
+        opt.set_maxeval(200);
 
         std::vector<Scalar> U_opt = U;  // warm start
         Scalar minf               = 0;
@@ -594,7 +574,7 @@ public:
         auto traj  = rollout(U_opt);
         auto p_N   = traj[HorizonDim].template head<3>();
         auto eul_N = traj[HorizonDim].template tail<3>();
-        auto H_N   = eulerZYXToIsometry<Scalar>(p_N, eul_N);
+        auto H_N   = stateToIsometry<Scalar>(p_N, eul_N);
         auto err   = homogeneousError(H_N, H_goal);
         std::cout << "[PlannerMpc::getAction] Final pos error: " << err.head(3).norm()
                   << ", ori error: " << err.tail(3).norm() << "\n";
@@ -733,9 +713,10 @@ public:
 
             if (pos_diff < fusion_position_tolerance && ori_diff < fusion_orientation_tolerance) {
                 // If the poses are close, update the last fused waypoint by averaging the translation.
-                // fused.back().translation() = (fused.back().translation() + waypoints[i].translation()) / Scalar(2);
-                std::cout << "[PlannerMpc::fuseWaypoints] Fused waypoints at index " << i << std::endl;
+                // fused.back().translation() = (fused.back().translation() + waypoints[i].translation()) /
+                // Scalar(2);
                 // For rotation: if the difference is very small, simply keep the existing rotation.
+                std::cout << "[PlannerMpc::fuseWaypoints] Fused waypoints at index " << i << std::endl;
             }
             else {
                 fused.push_back(waypoints[i]);
@@ -777,7 +758,7 @@ public:
             Eigen::Matrix<Scalar, 3, 1> p   = next_s.head(3);
             Eigen::Matrix<Scalar, 3, 1> eul = next_s.tail(3);
 
-            IsometryT H_next = eulerZYXToIsometry(p, eul);
+            IsometryT H_next = stateToIsometry(p, eul);
             auto err         = homogeneousError(H_next, H_goal);
             double pos_err   = err.head(3).norm();
             double ori_err   = err.tail(3).norm();
@@ -860,7 +841,7 @@ public:
         // --- Apply scaling and re-centering ---
         // For example, set the desired scale factor:
         float cutter_scale = 1.0f;
-        // Compute the centroid of the cloud.
+        // Compute the look_at_goal of the cloud.
         Eigen::Vector4f centroid(0, 0, 0, 0);
         for (const auto& pt : cloud->points) {
             centroid += Eigen::Vector4f(pt.x, pt.y, pt.z, 1.0f);

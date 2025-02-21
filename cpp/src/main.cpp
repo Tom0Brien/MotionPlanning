@@ -14,7 +14,7 @@
 int main() {
     const size_t StateDim   = 6;
     const size_t ActionDim  = 6;
-    const size_t HorizonDim = 6;
+    const size_t HorizonDim = 2;
     PlannerMpc<StateDim, ActionDim, HorizonDim, double> planner;
 
     // 1) Load original cloud
@@ -39,21 +39,31 @@ int main() {
     planner.obstacle_cloud = downsampled_cloud;
     planner.kd_tree        = kd_tree;
 
-    // 5) Set weights, collision, and visibility settings
-    planner.w_p                  = 1e3;  // Positional tracking cost weight.
-    planner.w_q                  = 1e2;  // Orientation tracking cost weight.
-    planner.w_p_term             = 1e4;  // Terminal positional cost weight.
-    planner.w_q_term             = 1e2;  // Terminal orientation cost weight.
-    planner.w_obs                = 1e3;  // Obstacle avoidance cost weight.
-    planner.collision_margin     = 0.05;
-    planner.w_visibility         = 200.0;
-    planner.alpha_visibility     = 20.0;
-    planner.d_thresh             = 0.05;
+    // Pose parameters
+    planner.w_p      = 1e4;  // Positional tracking cost weight.
+    planner.w_q      = 1e2;  // Orientation tracking cost weight.
+    planner.w_p_term = 1e4;  // Terminal positional cost weight.
+    planner.w_q_term = 1e2;  // Terminal orientation cost weight.
+
+    // Look at goal parameters
+    planner.w_look_at_goal        = 1e2;  // Look at goal cost weight.
+    planner.look_at_goal_distance = 0.11;
+
+    // Collision parameters
+    planner.w_obs            = 1e3;  // Obstacle avoidance cost weight.
+    planner.collision_margin = 0.05;
+
+    // Camera parameters
     planner.visibility_fov       = 60.0;  // Field of view in degrees.
     planner.visibility_min_range = 0.01;
     planner.visibility_max_range = 0.5;
-    planner.max_iterations       = 20;
-    planner.min_visible_points   = 20;
+
+    // Visibility parameters
+    planner.min_visible_ratio = 0.1;
+    planner.alpha_visibility  = 0.2;  // Tuning parameter to control the saturation rate.
+
+    // Planner parameters
+    planner.max_iterations = 20;
 
     // MPPI parameters
     planner.num_samples   = 200;           // Number of candidate trajectories to sample.
@@ -62,14 +72,14 @@ int main() {
     planner.noise_std_ori = double(0.05);  // Standard deviation for orientation noise.
 
     // Fusion parameters
-    planner.fusion_position_tolerance    = 0.02;
+    planner.fusion_position_tolerance    = 0.03;
     planner.fusion_orientation_tolerance = 0.1;
 
     // 6) Set control bounds
     planner.dp_max     = 0.025;
     planner.dp_min     = -0.025;
-    planner.dtheta_max = 0.1;
-    planner.dtheta_min = -0.1;
+    planner.dtheta_max = 0.15;
+    planner.dtheta_min = -0.15;
 
     // 7) Update the collision box from the STL model of the end effector.
     // Here we load the STL file from "../data/cutter.stl" and apply a rigid transform to it to position it correctly in
@@ -116,7 +126,7 @@ int main() {
 
     // 8) Set the initial pose
     Eigen::Isometry3d H_0 = Eigen::Isometry3d::Identity();
-    H_0.translation()     = Eigen::Vector3d(0.2, 0.2, 0.725);
+    H_0.translation()     = Eigen::Vector3d(0.0, 0.0, 0.725);
     double r1 = -M_PI_2, p1 = 0, yaw1 = 0;
     Eigen::AngleAxisd Rz0(yaw1, Eigen::Vector3d::UnitZ());
     Eigen::AngleAxisd Ry0(p1, Eigen::Vector3d::UnitY());
@@ -155,15 +165,15 @@ int main() {
         Eigen::Isometry3d H_goal_1;
         H_goal_1.linear() << 0.9907284963734801, 0.01923310699281764, -0.13441684452520866, 0.1337577243239575,
             0.032219489672272936, 0.9904804604618397, 0.02338085880431727, -0.9992957480549294, 0.029348189933893397;
-        H_goal_1.translation() << 0.243274508481936, 0.36056617285391136, 0.6743629428023914;
+        H_goal_1.translation() << 0.243274508481936, 0.44056617285391136, 0.6743629428023914;
 
         Eigen::Isometry3d H_goal_2;
         H_goal_2.linear() << 0.6425468638021853, 0.7591589463428162, -0.10393779340133653, 0.07738188639841208,
             0.07066251869164698, 0.9944846379633997, 0.7623164161794022, -0.6470583456225703, -0.013341171570557007;
-        H_goal_2.translation() << 0.2930928703755895, 0.4462194264333198, 0.7255900206364525;
+        H_goal_2.translation() << 0.2930928703755895, 0.3962194264333198, 0.7255900206364525;
 
         goals.emplace_back(H_goal_1);
-        // goals.emplace_back(H_goal_2);
+        goals.emplace_back(H_goal_2);
     }
 
     // Write goals to "goals.csv"
@@ -266,38 +276,6 @@ int main() {
     auto end_total = std::chrono::high_resolution_clock::now();
     std::cout << "Total planning for all goals took "
               << std::chrono::duration_cast<std::chrono::milliseconds>(end_total - start_total).count() << " ms.\n";
-
-    // ------------------------------------------------------------
-    // Post-process: extract collision debug points from all waypoints.
-    // ------------------------------------------------------------
-    pcl::PointCloud<pcl::PointXYZ>::Ptr collision_debug_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-
-    for (const auto& waypoints_for_goal : all_waypoints) {
-        for (const auto& wp : waypoints_for_goal) {
-            // Extract the points that are inside the collision box at this waypoint.
-            pcl::PointCloud<pcl::PointXYZ>::Ptr in_box =
-                extractPointsInBox<double>(originalCloud, wp, planner.box_min, planner.box_max);
-
-            // Append these points to the collision debug cloud.
-            collision_debug_cloud->points.insert(collision_debug_cloud->points.end(),
-                                                 in_box->points.begin(),
-                                                 in_box->points.end());
-        }
-    }
-
-    // Save the debug cloud to a file.
-    if (collision_debug_cloud->points.empty()) {
-        std::cerr << "[DEBUG] No collision points found in the trajectory.\n";
-        // Delete the file if it exists.
-        std::filesystem::remove("collision_debug.pcd");
-    }
-    else {
-        collision_debug_cloud->width  = static_cast<uint32_t>(collision_debug_cloud->points.size());
-        collision_debug_cloud->height = 1;
-        pcl::io::savePCDFileASCII("collision_debug.pcd", *collision_debug_cloud);
-        std::cout << "[DEBUG] Saved collision debug cloud with " << collision_debug_cloud->points.size()
-                  << " points to collision_debug.pcd" << std::endl;
-    }
 
 
     return 0;
