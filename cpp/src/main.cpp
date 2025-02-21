@@ -14,7 +14,7 @@
 int main() {
     const size_t StateDim   = 6;
     const size_t ActionDim  = 6;
-    const size_t HorizonDim = 2;
+    const size_t HorizonDim = 1;
     PlannerMpc<StateDim, ActionDim, HorizonDim, double> planner;
 
     // 1) Load original cloud
@@ -28,7 +28,7 @@ int main() {
     pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::VoxelGrid<pcl::PointXYZ> voxel;
     voxel.setInputCloud(originalCloud);
-    voxel.setLeafSize(0.02f, 0.02f, 0.02f);
+    voxel.setLeafSize(0.03, 0.03, 0.03);
     voxel.filter(*downsampled_cloud);
 
     // 3) Build KD-tree
@@ -55,7 +55,7 @@ int main() {
 
     // Camera parameters
     planner.visibility_fov       = 60.0;  // Field of view in degrees.
-    planner.visibility_min_range = 0.01;
+    planner.visibility_min_range = 0.07;
     planner.visibility_max_range = 0.5;
 
     // Visibility parameters
@@ -165,15 +165,15 @@ int main() {
         Eigen::Isometry3d H_goal_1;
         H_goal_1.linear() << 0.9907284963734801, 0.01923310699281764, -0.13441684452520866, 0.1337577243239575,
             0.032219489672272936, 0.9904804604618397, 0.02338085880431727, -0.9992957480549294, 0.029348189933893397;
-        H_goal_1.translation() << 0.243274508481936, 0.44056617285391136, 0.6743629428023914;
+        H_goal_1.translation() << 0.243274508481936, 0.39056617285391136, 0.6743629428023914;
 
         Eigen::Isometry3d H_goal_2;
         H_goal_2.linear() << 0.6425468638021853, 0.7591589463428162, -0.10393779340133653, 0.07738188639841208,
             0.07066251869164698, 0.9944846379633997, 0.7623164161794022, -0.6470583456225703, -0.013341171570557007;
         H_goal_2.translation() << 0.2930928703755895, 0.3962194264333198, 0.7255900206364525;
 
-        goals.emplace_back(H_goal_1);
         goals.emplace_back(H_goal_2);
+        goals.emplace_back(H_goal_1);
     }
 
     // Write goals to "goals.csv"

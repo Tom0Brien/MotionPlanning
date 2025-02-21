@@ -449,7 +449,7 @@ public:
                 c = Scalar(-1);
 
             Scalar angle = std::acos(c);
-            cost_rot     = 10 * wq * angle * angle;
+            cost_rot     = w_look_at_goal * angle * angle;
         }
 
         return cost_pose + cost_rot;
@@ -472,7 +472,7 @@ public:
         // The tuning parameter 'alpha' determines how steep the cost grows.
         Scalar delta = min_visible_points - v;
         if (delta > 0) {
-            return 1e3 * std::exp(alpha_visibility * delta) - 1.0;
+            return std::exp(alpha_visibility * delta) - 1.0;
         }
         else {
             return 0.0;
